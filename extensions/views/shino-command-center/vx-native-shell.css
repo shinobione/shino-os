@@ -1,0 +1,174 @@
+/* SHINO native-home integration: keep Jarvis atmosphere/orb, replace only the chrome. */
+body.shino-home-active.view-active .home-orb-wrap {
+  opacity: 1 !important;
+  pointer-events: none !important;
+}
+body.shino-home-active.view-active #orb-canvas {
+  pointer-events: none !important;
+}
+body.shino-home-active .home-top,
+body.shino-home-active .hc-widget,
+body.shino-home-active .cam-overlay,
+body.shino-home-active .home-channel,
+body.shino-home-active .rooms-mc,
+body.shino-home-active .rooms-pages,
+body.shino-home-active .mode-watermark {
+  opacity: 0 !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+}
+body.shino-home-active #voice-status {
+  z-index: 120 !important;
+  bottom: 142px !important;
+  color: rgba(126,232,255,.82) !important;
+  text-shadow: 0 0 14px rgba(72,221,255,.45);
+}
+
+#shino-command-center-container {
+  z-index: 40 !important;
+  background: transparent !important;
+  transition: opacity .22s ease !important;
+}
+#shino-command-center-container::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(1,7,12,.76) 0%, rgba(1,7,12,.38) 28%, rgba(1,7,12,.04) 42%, rgba(1,7,12,.04) 58%, rgba(1,7,12,.38) 72%, rgba(1,7,12,.76) 100%),
+    linear-gradient(180deg, rgba(1,7,12,.38), transparent 24%, transparent 76%, rgba(1,7,12,.55));
+}
+
+#shino-command-center-container .sho-corecanvas,
+#shino-command-center-container .sho-orbit,
+#shino-command-center-container .sho-ticks,
+#shino-command-center-container .sho-horizon {
+  display: none !important;
+}
+#shino-command-center-container .sho-corezone::before {
+  display: none !important;
+}
+#shino-command-center-container .sho-native-corezone {
+  overflow: visible;
+  pointer-events: none;
+}
+#shino-command-center-container .sho-native-core-aura {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(27vw, 56vh, 700px);
+  aspect-ratio: 1;
+  transform: translate(-50%,-50%);
+  border-radius: 50%;
+  border: 1px solid rgba(72,221,255,.10);
+  box-shadow:
+    0 0 90px rgba(53,145,255,.08),
+    inset 0 0 90px rgba(72,221,255,.035);
+  background: radial-gradient(circle, transparent 48%, rgba(72,221,255,.022) 66%, transparent 72%);
+}
+#shino-command-center-container .sho-native-core-aura::before,
+#shino-command-center-container .sho-native-core-aura::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  inset: 8%;
+  border: 1px dashed rgba(72,221,255,.12);
+  animation: sho-native-spin 42s linear infinite;
+}
+#shino-command-center-container .sho-native-core-aura::after {
+  inset: -8%;
+  border-style: solid;
+  border-color: rgba(72,221,255,.06);
+  animation-duration: 75s;
+  animation-direction: reverse;
+}
+#shino-command-center-container .sho-native-orb-caption {
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font: 500 8px/1 var(--mono,monospace);
+  letter-spacing: .28em;
+  color: rgba(110,173,202,.42);
+}
+#shino-command-center-container .sho-corelabel {
+  top: 7%;
+}
+#shino-command-center-container .sho-service {
+  bottom: 8%;
+}
+
+#shino-command-center-container .sho-native-action {
+  min-width: 154px;
+  height: 48px;
+  padding: 0 14px;
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(73,183,255,.17);
+  border-radius: 9px;
+  background: rgba(5,18,30,.62);
+  color: #bad7e7;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .16s ease, background .16s ease, box-shadow .16s ease;
+}
+#shino-command-center-container .sho-native-action span {
+  font: 600 9px/1 var(--mono,monospace);
+  color: #48ddff;
+  letter-spacing: .12em;
+}
+#shino-command-center-container .sho-native-action b {
+  font: 600 9px/1.15 var(--mono,monospace);
+  letter-spacing: .10em;
+}
+#shino-command-center-container .sho-native-action:hover,
+#shino-command-center-container .sho-native-action.active {
+  border-color: rgba(72,221,255,.48);
+  background: rgba(11,59,89,.56);
+  box-shadow: 0 0 22px rgba(48,194,255,.10);
+}
+#shino-command-center-container .sho-voice-btn.active span,
+#shino-command-center-container .sho-voice-btn.active b {
+  color: #56ffd1;
+}
+#shino-command-center-container .sho-home-lock {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center !important;
+  color: #48ddff !important;
+  font: 700 10px/1 var(--mono,monospace) !important;
+  letter-spacing: .18em;
+  border-color: rgba(72,221,255,.20) !important;
+}
+
+#shino-command-center-container .sho-panel {
+  background: linear-gradient(180deg, rgba(7,20,33,.77), rgba(4,14,24,.68));
+  backdrop-filter: blur(18px) saturate(135%);
+  -webkit-backdrop-filter: blur(18px) saturate(135%);
+}
+#shino-command-center-container .sho-top,
+#shino-command-center-container .sho-rail,
+#shino-command-center-container .sho-dock {
+  background: rgba(2,9,16,.72);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+}
+#shino-command-center-container .sho-topstats {
+  gap: 16px;
+  align-items: center;
+}
+#shino-command-center-container .sho-topstat {
+  min-width: 78px;
+}
+
+@keyframes sho-native-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 2500px) {
+  #shino-command-center-container .sho-native-action { min-width: 126px; }
+  #shino-command-center-container .sho-native-action b { font-size: 8px; }
+}
