@@ -1,0 +1,9 @@
+#shino-global-nav { position: fixed; top: 14px; left: 50%; z-index: 5200; display: flex; align-items: center; gap: 4px; padding: 5px 6px; border: 1px solid rgba(134,191,232,.14); border-radius: 15px; background: rgba(5,10,18,.78); backdrop-filter: blur(24px); transform: translateX(-50%); }
+body[data-mode="home"] #shino-global-nav, body.shino-home-active #shino-global-nav { display: none !important; }
+#shino-global-nav button { height: 34px; border: 0; border-radius: 9px; background: transparent; color: rgba(214,232,245,.48); padding: 0 12px; font: 600 9px/1 monospace; letter-spacing: .12em; cursor: pointer; }
+#shino-global-nav button:hover { color: #effaff; background: rgba(95,185,255,.08); }
+#shino-global-nav .sgn-route.active { color: #75e7ff; background: rgba(70,187,255,.13); box-shadow: inset 0 -2px 0 rgba(117,231,255,.82); }
+#shino-global-nav .sgn-brand { display: flex; align-items: center; gap: 8px; color: #dff7ff; }
+#shino-global-nav .sgn-mark { width: 14px; height: 14px; border: 1px solid #75e7ff; transform: rotate(45deg); }
+#shino-global-nav .sgn-sep { width: 1px; height: 18px; background: rgba(220,235,255,.10); margin: 0 2px; }
+#shino-global-nav .sgn-mc { color: rgba(117,231,255,.65); }
