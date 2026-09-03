@@ -30,9 +30,51 @@ const wavePalette = {
   working: ['rgba(255,199,106,.60)', 'rgba(255,240,208,1)'],
   error: ['rgba(255,91,113,.72)', 'rgba(255,216,222,1)'],
 };
+const livingPalette = {
+  idle: [[43,189,255],[122,229,255],[76,112,255]],
+  listening: [[65,255,201],[104,231,255],[28,173,235]],
+  thinking: [[170,139,255],[113,157,255],[59,104,255]],
+  speaking: [[116,240,255],[225,252,255],[45,184,255]],
+  working: [[255,203,105],[84,211,255],[43,135,255]],
+  error: [[255,86,112],[255,147,160],[157,37,76]],
+};
 
 const months = ['JANVIER','FÉVRIER','MARS','AVRIL','MAI','JUIN','JUILLET','AOÛT','SEPTEMBRE','OCTOBRE','NOVEMBRE','DÉCEMBRE'];
 const days = ['DIMANCHE','LUNDI','MARDI','MERCREDI','JEUDI','VENDREDI','SAMEDI'];
+
+const living = {
+  nodes: [],
+  wisps: [],
+  lastWidth: 0,
+  lastHeight: 0,
+};
+
+function randomSpherePoint() {
+  const z = Math.random() * 2 - 1;
+  const angle = Math.random() * Math.PI * 2;
+  const radius = .28 + Math.pow(Math.random(), .52) * .72;
+  const s = Math.sqrt(1 - z * z);
+  return {
+    x: Math.cos(angle) * s * radius,
+    y: Math.sin(angle) * s * radius,
+    z: z * radius,
+    radius,
+    seed: Math.random() * Math.PI * 2,
+    speed: .35 + Math.random() * .85,
+    size: .65 + Math.random() * 1.65,
+  };
+}
+
+function setupLivingCore() {
+  living.nodes = Array.from({ length: 86 }, randomSpherePoint);
+  living.wisps = Array.from({ length: 18 }, (_, index) => ({
+    angle: Math.random() * Math.PI * 2,
+    drift: .2 + Math.random() * .7,
+    bend: .18 + Math.random() * .42,
+    phase: Math.random() * Math.PI * 2,
+    index,
+  }));
+}
 
 function pad(value) {
   return String(value).padStart(2, '0');
@@ -57,6 +99,160 @@ function setCoreState(name, message = null, duration = 0) {
       setCoreState(state.listening ? 'listening' : 'idle');
     }, duration);
   }
+}
+
+function rgba(rgb, alpha) {
+  return `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha})`;
+}
+
+function rotatePoint(point, ax, ay) {
+  const cosy = Math.cos(ay);
+  const siny = Math.sin(ay);
+  const cosx = Math.cos(ax);
+  const sinx = Math.sin(ax);
+  const x1 = point.x * cosy - point.z * siny;
+  const z1 = point.x * siny + point.z * cosy;
+  const y1 = point.y * cosx - z1 * sinx;
+  const z2 = point.y * sinx + z1 * cosx;
+  return { x: x1, y: y1, z: z2 };
+}
+
+function drawLivingCore() {
+  const canvas = $('#livingCore');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = Math.max(1, Math.min(1.55, window.devicePixelRatio || 1));
+  const width = canvas.clientWidth || 420;
+  const height = canvas.clientHeight || 420;
+  const pixelW = Math.round(width * dpr);
+  const pixelH = Math.round(height * dpr);
+  if (canvas.width !== pixelW || canvas.height !== pixelH) {
+    canvas.width = pixelW;
+    canvas.height = pixelH;
+    living.lastWidth = width;
+    living.lastHeight = height;
+  }
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+  ctx.globalCompositeOperation = 'lighter';
+
+  const palette = livingPalette[state.core] || livingPalette.idle;
+  const cx = width / 2;
+  const cy = height / 2;
+  const baseRadius = Math.min(width, height) * .43;
+  const pulseMap = { idle:.025, listening:.075, thinking:.04, speaking:.085, working:.045, error:.095 };
+  const pulse = 1 + Math.sin(state.phase * 2.7) * (pulseMap[state.core] || .03);
+  const convergence = state.core === 'thinking' ? .82 + Math.sin(state.phase * 1.8) * .08 : 1;
+  const errorJitter = state.core === 'error' ? Math.sin(state.phase * 31) * 3.2 : 0;
+  const sphereRadius = baseRadius * pulse * convergence;
+
+  const halo = ctx.createRadialGradient(cx, cy, 0, cx, cy, baseRadius * 1.05);
+  halo.addColorStop(0, rgba(palette[1], state.core === 'speaking' ? .34 : .23));
+  halo.addColorStop(.28, rgba(palette[0], .14));
+  halo.addColorStop(.68, rgba(palette[2], .045));
+  halo.addColorStop(1, rgba(palette[2], 0));
+  ctx.fillStyle = halo;
+  ctx.beginPath();
+  ctx.arc(cx, cy, baseRadius * 1.07, 0, Math.PI * 2);
+  ctx.fill();
+
+  const rotY = state.phase * (state.core === 'thinking' ? .55 : state.core === 'error' ? 1.05 : .25);
+  const rotX = Math.sin(state.phase * .17) * .34;
+  const projected = living.nodes.map((node, index) => {
+    const organic = 1 + Math.sin(state.phase * node.speed + node.seed) * .055;
+    const point = {
+      x: node.x * organic,
+      y: node.y * organic,
+      z: node.z * organic,
+    };
+    const rotated = rotatePoint(point, rotX, rotY + node.seed * .025);
+    const perspective = 1 / (1.72 - rotated.z * .42);
+    const audioKick = state.core === 'listening' || state.core === 'speaking'
+      ? 1 + Math.sin(state.phase * 7 + node.seed) * .035
+      : 1;
+    const r = sphereRadius * perspective * 1.42 * audioKick;
+    return {
+      x: cx + rotated.x * r + errorJitter * Math.sin(index * 2.17),
+      y: cy + rotated.y * r + errorJitter * Math.cos(index * 1.91),
+      z: rotated.z,
+      size: node.size * (.72 + perspective * .72),
+      depth: Math.max(0, Math.min(1, (rotated.z + 1) / 2)),
+      node,
+    };
+  });
+
+  ctx.lineCap = 'round';
+  for (let i = 0; i < projected.length; i += 1) {
+    const a = projected[i];
+    for (let j = i + 1; j < projected.length; j += 1) {
+      const b = projected[j];
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const dist = Math.hypot(dx, dy);
+      const maxDist = baseRadius * (state.core === 'thinking' ? .27 : .22);
+      if (dist > maxDist) continue;
+      const depth = (a.depth + b.depth) * .5;
+      const alpha = (1 - dist / maxDist) * (.035 + depth * .115);
+      ctx.strokeStyle = rgba(depth > .62 ? palette[1] : palette[0], alpha);
+      ctx.lineWidth = .38 + depth * .72;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      const bend = Math.sin((i + j) * .73 + state.phase) * dist * .08;
+      ctx.quadraticCurveTo((a.x + b.x) / 2 + bend, (a.y + b.y) / 2 - bend, b.x, b.y);
+      ctx.stroke();
+    }
+  }
+
+  living.wisps.forEach((wisp) => {
+    const t = state.phase * wisp.drift + wisp.phase;
+    const angle = wisp.angle + t * .18;
+    const inner = sphereRadius * (.08 + (wisp.index % 5) * .018);
+    const outer = sphereRadius * (.68 + Math.sin(t) * .12);
+    const sx = cx + Math.cos(angle + Math.sin(t) * .6) * inner;
+    const sy = cy + Math.sin(angle - Math.cos(t) * .5) * inner;
+    const ex = cx + Math.cos(angle + wisp.bend + Math.sin(t * .7) * .25) * outer;
+    const ey = cy + Math.sin(angle + wisp.bend - Math.cos(t * .6) * .28) * outer;
+    const c1x = cx + Math.cos(angle + .9) * sphereRadius * .35;
+    const c1y = cy + Math.sin(angle + .55) * sphereRadius * .35;
+    const c2x = cx + Math.cos(angle - .75) * sphereRadius * .52;
+    const c2y = cy + Math.sin(angle - .45) * sphereRadius * .52;
+    const grad = ctx.createLinearGradient(sx, sy, ex, ey);
+    grad.addColorStop(0, rgba(palette[1], .04));
+    grad.addColorStop(.45, rgba(palette[0], state.core === 'speaking' ? .30 : .20));
+    grad.addColorStop(1, rgba(palette[2], .015));
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = state.core === 'thinking' ? 1.35 : .82;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex, ey);
+    ctx.stroke();
+  });
+
+  projected.sort((a, b) => a.z - b.z).forEach((point) => {
+    const alpha = .18 + point.depth * .68;
+    ctx.shadowBlur = 9 + point.depth * 12;
+    ctx.shadowColor = rgba(palette[0], .72);
+    ctx.fillStyle = rgba(point.depth > .72 ? palette[1] : palette[0], alpha);
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, point.size * (.6 + point.depth * .9), 0, Math.PI * 2);
+    ctx.fill();
+  });
+  ctx.shadowBlur = 0;
+
+  const nucleusPulse = 1 + Math.sin(state.phase * (state.core === 'speaking' ? 6.2 : 3.1)) * .14;
+  const nucleusRadius = baseRadius * .12 * nucleusPulse;
+  const nucleus = ctx.createRadialGradient(cx, cy, 0, cx, cy, nucleusRadius * 2.4);
+  nucleus.addColorStop(0, 'rgba(255,255,255,.98)');
+  nucleus.addColorStop(.14, rgba(palette[1], .96));
+  nucleus.addColorStop(.48, rgba(palette[0], .34));
+  nucleus.addColorStop(1, rgba(palette[2], 0));
+  ctx.fillStyle = nucleus;
+  ctx.beginPath();
+  ctx.arc(cx, cy, nucleusRadius * 2.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.globalCompositeOperation = 'source-over';
 }
 
 function drawGraph(canvas, base, amplitude, phaseOffset = 0) {
@@ -155,6 +351,7 @@ function updateTelemetry() {
 function tick() {
   const speed = state.core === 'thinking' ? .045 : state.core === 'error' ? .07 : state.core === 'speaking' ? .038 : .025;
   state.phase += speed;
+  drawLivingCore();
   drawGraph($('#gpu3070'), state.gpu3070, 17, 0);
   drawGraph($('#gpu3060'), state.gpu3060, 11, 1.7);
   drawVoiceWave();
@@ -180,8 +377,8 @@ function chooseDemoReply(text) {
   if (lower.includes('riso')) return 'Mode RISO actif. Les connecteurs manuels, stock et tournée seront branchés ici.';
   if (lower.includes('music') || lower.includes('suno')) return 'Mode MUSIC prêt. Le skill SHINOBIWAN prendra la main depuis ce panneau.';
   if (lower.includes('gpu') || lower.includes('3070')) return 'Les jauges sont encore simulées. La télémétrie LAN 3060 / 3070 Ti arrive au prochain branchement système.';
-  if (lower.includes('bonjour') || lower.includes('salut')) return 'À votre service. SHINO-OS V0.1.1 est en ligne.';
-  return 'Reçu. Le shell V0.1.1 est en démonstration : le moteur IA sera branché après validation visuelle.';
+  if (lower.includes('bonjour') || lower.includes('salut')) return 'À votre service. SHINO-OS V0.1.2 Living Core est en ligne.';
+  return 'Reçu. Le Living Core tourne en temps réel : le moteur IA sera branché après validation visuelle.';
 }
 
 function demoReply(text) {
@@ -270,10 +467,15 @@ window.addEventListener('keydown', (event) => {
     $('#voiceButton').click();
   }
   if (event.key >= '1' && event.key <= '6' && document.activeElement !== $('#chatInput')) {
-    setCoreState(coreStates[Number(event.key) - 1]);
+    const next = coreStates[Number(event.key) - 1];
+    state.listening = next === 'listening';
+    $('#voiceButton').classList.toggle('listening', state.listening);
+    $('#voiceStatus').textContent = state.listening ? 'LISTENING' : 'ACTIVE';
+    setCoreState(next);
   }
 });
 
+setupLivingCore();
 updateClock();
 updateTelemetry();
 setCoreState('idle');
