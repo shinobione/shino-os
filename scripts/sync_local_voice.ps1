@@ -29,7 +29,6 @@ $content = Get-Content $AppPath -Raw -Encoding UTF8
 $pattern = [regex]::Escape($begin) + "(?s).*?" + [regex]::Escape($end) + "\r?\n?"
 $content = [regex]::Replace($content, $pattern, "")
 
-$anchor = "# ── [SURFACE]"
 $block = @'
 # SHINO_LOCAL_VOICE_BEGIN
 from jarvis.interfaces.api.shino_local_voice import router as shino_local_voice_router  # noqa: E402
@@ -38,11 +37,11 @@ app.include_router(shino_local_voice_router)
 
 '@
 
-if ($content.Contains($anchor)) {
-  $content = $content.Replace($anchor, $block + $anchor)
-} else {
-  throw "Ancre Jarvis introuvable dans app.py pour le bridge vocal SHINO."
+$surface = [regex]::Match($content, '(?m)^# .*\[SURFACE\].*$')
+if (-not $surface.Success) {
+  throw "Ancre SURFACE Jarvis introuvable dans app.py pour le bridge vocal SHINO."
 }
+$content = $content.Insert($surface.Index, $block)
 Set-Content -Path $AppPath -Value $content -Encoding UTF8
 
 function Set-EnvValue([string]$Name, [string]$Value) {
