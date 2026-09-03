@@ -85,11 +85,54 @@ function Ensure-SetupBundle {
 }
 
 function Set-ShinoEnvironment {
-  # Jarvis natively scans this root for skills/, presets/ and views/.
-  # These lightweight extension sources can remain in the SHINO-OS Git repo.
+  # Jarvis natively scans this root for dev skills/presets and mounts dev views.
+  # The current upstream view-script endpoint still enumerates installed views,
+  # therefore Sync-ShinoInstalledViews also stages SHINO views into that path.
   $env:JARVIS_DEV_EXTENSIONS_DIR = $ExtensionsRoot
   $env:SHINO_OS_ROOT = $Root
   $env:SHINO_OS = '1'
+}
+
+function Sync-ShinoInstalledViews {
+  $viewsRoot = Join-Path $ExtensionsRoot 'views'
+  if (-not (Test-Path $viewsRoot)) { return }
+
+  $staticRoot = Join-Path $JarvisDir 'src\jarvis\interfaces\ui\static\skills'
+  $installedRoot = Join-Path $JarvisDir 'skills_data\installed'
+  New-Item -ItemType Directory -Force -Path $staticRoot | Out-Null
+  New-Item -ItemType Directory -Force -Path $installedRoot | Out-Null
+
+  foreach ($viewDir in Get-ChildItem -Path $viewsRoot -Directory) {
+    $name = $viewDir.Name
+    $skillYaml = Join-Path $viewDir.FullName 'skill.yaml'
+    $skillPy = Join-Path $viewDir.FullName 'skill.py'
+    $viewJs = Join-Path $viewDir.FullName 'view.js'
+
+    if (-not (Test-Path $skillYaml) -or -not (Test-Path $skillPy) -or -not (Test-Path $viewJs)) {
+      Write-Shino "Vue ignorée (packaging incomplet): $name"
+      continue
+    }
+
+    $staticDest = Join-Path $staticRoot $name
+    $installedDest = Join-Path $installedRoot $name
+
+    # Rebuild only our named staging directories so stale JS/CSS never survives a pull.
+    if (Test-Path $staticDest) { Remove-Item $staticDest -Recurse -Force }
+    if (Test-Path $installedDest) { Remove-Item $installedDest -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $staticDest | Out-Null
+    New-Item -ItemType Directory -Force -Path $installedDest | Out-Null
+
+    Get-ChildItem -Path $viewDir.FullName -File | Where-Object {
+      $_.Extension -in @('.js', '.css')
+    } | ForEach-Object {
+      Copy-Item $_.FullName (Join-Path $staticDest $_.Name) -Force
+    }
+
+    Copy-Item $skillYaml (Join-Path $installedDest 'skill.yaml') -Force
+    Copy-Item $skillPy (Join-Path $installedDest 'skill.py') -Force
+
+    Write-Shino "Vue Jarvis synchronisée: $name"
+  }
 }
 
 function Invoke-Jarvis([string]$JarvisCommand) {
@@ -99,6 +142,10 @@ function Invoke-Jarvis([string]$JarvisCommand) {
   if ($JarvisCommand -eq 'setup') {
     Ensure-SetupBundle
   }
+
+  # Current Jarvis upstream mounts dev view assets but /api/skills/view-scripts
+  # only enumerates installed view metadata. Stage our overlay before every launch.
+  Sync-ShinoInstalledViews
 
   $launcher = Join-Path $JarvisDir 'jarvis.bat'
   if (-not (Test-Path $launcher)) { throw "Lanceur Jarvis introuvable: $launcher" }
@@ -130,6 +177,7 @@ function Show-Status {
     Write-Shino "Au pin: $($sha -eq $lock.ref)"
     Write-Shino "Bundle présent: $(Test-Path (Join-Path $JarvisDir 'bundle\manifest.json'))"
     Write-Shino ".env présent: $(Test-Path (Join-Path $JarvisDir '.env'))"
+    Write-Shino "Command Center stagé: $(Test-Path (Join-Path $JarvisDir 'skills_data\installed\shino-command-center\skill.yaml'))"
   } else {
     Write-Shino 'Runtime Jarvis: non installé.'
   }
