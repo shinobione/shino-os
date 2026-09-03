@@ -1,18 +1,19 @@
 #shino-shell-nav{
   position:fixed;
-  top:18px;
+  top:14px;
   left:50%;
-  transform:translateX(-50%) translateY(-10px);
+  transform:translateX(-50%) translateY(-8px);
   z-index:80;
   display:flex;
   align-items:center;
-  gap:6px;
-  min-width:720px;
-  padding:8px 10px;
+  width:max-content;
+  max-width:calc(100vw - 24px);
+  gap:2px;
+  padding:5px 6px;
   border:1px solid rgba(72,221,255,.18);
-  border-radius:12px;
-  background:rgba(2,9,16,.82);
-  box-shadow:0 12px 45px rgba(0,0,0,.32),0 0 28px rgba(48,194,255,.07);
+  border-radius:10px;
+  background:rgba(2,9,16,.84);
+  box-shadow:0 10px 32px rgba(0,0,0,.3),0 0 22px rgba(48,194,255,.06);
   backdrop-filter:blur(18px) saturate(135%);
   -webkit-backdrop-filter:blur(18px) saturate(135%);
   opacity:0;
@@ -27,14 +28,15 @@
   transform:translateX(-50%) translateY(0);
 }
 #shino-shell-nav button{
-  height:34px;
-  padding:0 13px;
+  height:30px;
+  padding:0 9px;
   border:1px solid transparent;
-  border-radius:8px;
+  border-radius:7px;
   background:transparent;
   color:#86a9bd;
-  font:600 9px/1 var(--mono,"Geist Mono",monospace);
-  letter-spacing:.12em;
+  font:600 8.5px/1 var(--mono,"Geist Mono",monospace);
+  letter-spacing:.1em;
+  white-space:nowrap;
   cursor:pointer;
 }
 #shino-shell-nav button:hover,
@@ -47,16 +49,23 @@
 #shino-shell-nav .ssn-brand{
   color:#48ddff;
   font-weight:800;
-  letter-spacing:.18em;
+  letter-spacing:.15em;
+  padding-left:10px;
+  padding-right:10px;
 }
-#shino-shell-nav .ssn-sep{
+#shino-shell-nav .ssn-sep,
+#shino-shell-nav .ssn-spacer{
+  flex:0 0 1px;
   width:1px;
-  height:22px;
-  background:rgba(72,221,255,.16);
-  margin:0 4px;
+  height:18px;
+  background:rgba(72,221,255,.14);
+  margin:0 3px;
 }
-#shino-shell-nav .ssn-spacer{flex:1}
-#shino-shell-nav .ssn-mc{color:#9bb7c7}
+#shino-shell-nav .ssn-mc{
+  color:#9bb7c7;
+  padding-left:8px;
+  padding-right:8px;
+}
 body.shino-frame-active #shino-command-center-container{
   display:none!important;
   opacity:0!important;
@@ -67,6 +76,12 @@ body.shino-frame-active .home-orb-wrap{
 }
 body.shino-home-active #shino-shell-nav{display:flex}
 @media(max-width:1100px){
-  #shino-shell-nav{min-width:0;width:calc(100% - 24px);top:12px}
-  #shino-shell-nav button{padding:0 8px;font-size:8px}
+  #shino-shell-nav{
+    top:10px;
+    width:calc(100% - 20px);
+    max-width:none;
+    justify-content:center;
+    overflow-x:auto;
+  }
+  #shino-shell-nav button{padding:0 7px;font-size:8px}
 }
