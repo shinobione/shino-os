@@ -93,6 +93,57 @@ function Set-ShinoEnvironment {
   $env:SHINO_OS = '1'
 }
 
+function Get-JarvisPort {
+  $port = 8000
+  $envPath = Join-Path $JarvisDir '.env'
+  if (Test-Path $envPath) {
+    $line = Get-Content $envPath | Where-Object { $_ -match '^\s*PORT\s*=\s*\d+\s*$' } | Select-Object -First 1
+    if ($line -and $line -match '=\s*(\d+)\s*$') {
+      $port = [int]$Matches[1]
+    }
+  }
+  return $port
+}
+
+function Clear-StaleJarvisListener {
+  param([int]$Port)
+
+  $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+  if ($listeners.Count -eq 0) { return }
+
+  $listener = $listeners | Select-Object -First 1
+  $ownerPid = [int]$listener.OwningProcess
+  $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerPid" -ErrorAction SilentlyContinue
+  $name = if ($proc -and $proc.Name) { [string]$proc.Name } else { "PID $ownerPid" }
+  $cmd = if ($proc -and $proc.CommandLine) { [string]$proc.CommandLine } else { '' }
+  $exe = if ($proc -and $proc.ExecutablePath) { [string]$proc.ExecutablePath } else { '' }
+
+  $jarvisNorm = [IO.Path]::GetFullPath($JarvisDir).TrimEnd('\')
+  $looksLikeJarvis = $false
+  if ($cmd -and $cmd.IndexOf($jarvisNorm, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $looksLikeJarvis = $true }
+  if ($exe -and $exe.IndexOf($jarvisNorm, [StringComparison]::OrdinalIgnoreCase) -eq 0) { $looksLikeJarvis = $true }
+  if ($cmd -match '(?i)\bjarvis\b') { $looksLikeJarvis = $true }
+
+  if (-not $looksLikeJarvis) {
+    $detail = if ($cmd) { $cmd } elseif ($exe) { $exe } else { 'commande inconnue' }
+    throw "Port $Port occupé par un autre processus: $name (PID $ownerPid). $detail"
+  }
+
+  Write-Shino "Ancienne instance Jarvis détectée sur le port $Port (PID $ownerPid) — arrêt..."
+  Stop-Process -Id $ownerPid -Force -ErrorAction Stop
+
+  for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Milliseconds 100
+    $still = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
+    if ($still.Count -eq 0) {
+      Write-Shino "Port $Port libéré."
+      return
+    }
+  }
+
+  throw "L'ancienne instance Jarvis (PID $ownerPid) a été arrêtée mais le port $Port reste occupé."
+}
+
 function Sync-ShinoInstalledViews {
   $viewsRoot = Join-Path $ExtensionsRoot 'views'
   if (-not (Test-Path $viewsRoot)) { return }
@@ -141,6 +192,10 @@ function Invoke-Jarvis([string]$JarvisCommand) {
 
   if ($JarvisCommand -eq 'setup') {
     Ensure-SetupBundle
+  }
+
+  if ($JarvisCommand -in @('run', 'api')) {
+    Clear-StaleJarvisListener -Port (Get-JarvisPort)
   }
 
   # Current Jarvis upstream mounts dev view assets but /api/skills/view-scripts
