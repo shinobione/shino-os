@@ -7,13 +7,9 @@
   const SILENCE_MS = 1050;
   const MAX_RECORD_MS = 20000;
   const RMS_GATE = 0.014;
-  const STT_TIMEOUT_MS = 300000;
+  const STT_TIMEOUT_MS = 60000;
   const ORB_STATE = {
-    idle: 'idle',
-    listening: 'listening',
-    thinking: 'thinking',
-    speaking: 'speaking',
-    error: 'offline',
+    idle: 'idle', listening: 'listening', thinking: 'thinking', speaking: 'speaking', error: 'offline',
   };
 
   let captureActive = false;
@@ -38,8 +34,7 @@
     return { ...(window.Jarvis?.authHeaders ? window.Jarvis.authHeaders() : {}), ...extra };
   }
   function applyNativeOrb(state) {
-    const nativeState = ORB_STATE[state] || 'idle';
-    try { window.__jarvisSetOrbState?.(nativeState); } catch (_) {}
+    try { window.__jarvisSetOrbState?.(ORB_STATE[state] || 'idle'); } catch (_) {}
   }
   function syncOrbHeartbeat() {
     if (authoritativeCore === 'idle') {
@@ -49,9 +44,7 @@
     }
     if (!orbHeartbeat) {
       orbHeartbeat = window.setInterval(() => {
-        if (captureActive || processing || authoritativeCore === 'error') {
-          applyNativeOrb(authoritativeCore);
-        }
+        if (captureActive || processing || authoritativeCore === 'error') applyNativeOrb(authoritativeCore);
       }, 180);
     }
   }
@@ -72,15 +65,17 @@
   function notify(text, kind = 'info') {
     try { window.Jarvis?.notify?.({ kind, text }); } catch (_) {}
   }
+  function handyModelLabel(status) {
+    const raw = String(status?.handy_model || 'Whisper Large V3 Turbo');
+    if (raw.includes('large-v3-turbo')) return 'TURBO';
+    return raw.split('/').pop().replace(/-gguf$/i, '').toUpperCase();
+  }
 
   function flatten() {
     const total = chunks.reduce((sum, c) => sum + c.length, 0);
     const out = new Float32Array(total);
     let offset = 0;
-    for (const c of chunks) {
-      out.set(c, offset);
-      offset += c.length;
-    }
+    for (const c of chunks) { out.set(c, offset); offset += c.length; }
     return out;
   }
 
@@ -108,10 +103,7 @@
   }
 
   async function fetchStatus() {
-    const response = await fetch('/api/shino/voice/status', {
-      cache: 'no-store',
-      headers: authHeaders(),
-    });
+    const response = await fetch('/api/shino/voice/status', { cache: 'no-store', headers: authHeaders() });
     if (!response.ok) throw new Error(`status HTTP ${response.status}`);
     return response.json();
   }
@@ -122,16 +114,10 @@
       notify('Micro navigateur indisponible.', 'err');
       return;
     }
-
     try {
       await ensurePlaybackContext();
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       captureCtx = new (window.AudioContext || window.webkitAudioContext)();
       sourceRate = captureCtx.sampleRate || 48000;
@@ -151,15 +137,11 @@
         const copy = new Float32Array(input.length);
         copy.set(input);
         chunks.push(copy);
-
         let power = 0;
         for (let i = 0; i < input.length; i++) power += input[i] * input[i];
         const rms = Math.sqrt(power / Math.max(1, input.length));
         const now = performance.now();
-        if (rms >= RMS_GATE) {
-          speechDetected = true;
-          lastVoiceAt = now;
-        }
+        if (rms >= RMS_GATE) { speechDetected = true; lastVoiceAt = now; }
         if ((speechDetected && now - lastVoiceAt >= SILENCE_MS) || now - startedAt >= MAX_RECORD_MS) {
           stopAndProcess();
         }
@@ -172,7 +154,7 @@
       setCore('listening');
     } catch (err) {
       captureActive = false;
-      setUi('VOICE OFF', 'LOCAL ERR', false);
+      setUi('VOICE OFF', 'MIC ERROR', false);
       setCore('error');
       notify(`Micro impossible: ${err.message || err}`, 'err');
       setTimeout(() => setCore('idle'), 1200);
@@ -187,11 +169,7 @@
     try { silentGain?.disconnect(); } catch (_) {}
     if (stream) stream.getTracks().forEach((track) => track.stop());
     try { await captureCtx?.close(); } catch (_) {}
-    stream = null;
-    captureCtx = null;
-    source = null;
-    processor = null;
-    silentGain = null;
+    stream = captureCtx = source = processor = silentGain = null;
   }
 
   async function transcribe(pcm) {
@@ -205,21 +183,20 @@
       try {
         const status = await fetchStatus();
         const elapsed = Math.max(1, Math.round((performance.now() - started) / 1000));
-        const model = String(status.whisper_model || 'whisper').toUpperCase();
-        if (status.stt_phase === 'loading' || status.whisper_loaded === false) {
-          setUi(`WHISPER LOADING ${elapsed}s`, `${model} COLD START`, true);
-        } else if (status.stt_phase === 'lan') {
+        if (status.stt_phase === 'lan') {
           setUi(`TRANSCRIBING ${elapsed}s`, 'WHISPER LAN', true);
         } else {
-          setUi(`TRANSCRIBING ${elapsed}s`, `${model} LOCAL`, true);
+          const model = handyModelLabel(status);
+          const backend = status.handy_bound_backend ? String(status.handy_bound_backend).toUpperCase() : 'VULKAN';
+          setUi(`HANDY ${elapsed}s`, `${model} · ${backend}`, true);
         }
         setCore('thinking');
       } catch (_) {
-        // The transcription request remains authoritative; status polling is diagnostic only.
+        setUi(`HANDY ${Math.max(1, Math.round((performance.now() - started) / 1000))}s`, 'TRANSCRIBING', true);
       } finally {
         pollBusy = false;
       }
-    }, 850);
+    }, 700);
 
     try {
       const bytes = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
@@ -232,7 +209,7 @@
       if (!response.ok) throw new Error(`STT HTTP ${response.status}`);
       return response.json();
     } catch (err) {
-      if (err?.name === 'AbortError') throw new Error('Whisper timeout après 5 min');
+      if (err?.name === 'AbortError') throw new Error('Handy timeout après 60 s');
       throw err;
     } finally {
       window.clearInterval(poll);
@@ -242,9 +219,7 @@
 
   async function synthesize(text) {
     const response = await fetch('/api/shino/voice/tts', {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ text }),
+      method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ text }),
     });
     if (!response.ok) throw new Error(`TTS HTTP ${response.status}`);
     return response.arrayBuffer();
@@ -260,9 +235,7 @@
         node.connect(ctx.destination);
         node.onended = resolve;
         node.start();
-      } catch (err) {
-        reject(err);
-      }
+      } catch (err) { reject(err); }
     });
   }
 
@@ -275,32 +248,37 @@
 
     try {
       if (recorded.length < recordedRate * 0.2) {
-        setUi('VOICE OFF', 'LOCAL', false);
+        setUi('VOICE READY', 'HANDY READY', false);
         setCore('idle');
         return;
       }
 
       let preflight = null;
       try { preflight = await fetchStatus(); } catch (_) {}
-      const cold = preflight && preflight.stt === 'local' && preflight.whisper_loaded === false;
-      setUi(cold ? 'WHISPER LOADING…' : 'TRANSCRIBING…', cold ? 'COLD START' : 'WHISPER', true);
+      if (preflight && preflight.stt !== 'lan' && preflight.handy_available === false) {
+        throw new Error('Handy introuvable sur ce PC');
+      }
+      setUi('HANDY…', preflight?.stt === 'lan' ? 'WHISPER LAN' : 'TURBO · RTX 3060', true);
       setCore('thinking');
       const pcm = resample(recorded, recordedRate, TARGET_RATE);
       const stt = await transcribe(pcm);
       const text = String(stt.text || '').trim();
       if (!text) {
-        setUi('VOICE OFF', 'LOCAL', false);
+        setUi('VOICE READY', 'HANDY READY', false);
         setCore('idle');
         notify('Je n’ai rien compris — retente.', 'warn');
         return;
       }
 
-      const sttMs = Number(stt.duration_ms || 0);
+      const inferMs = Number(stt.transcribe_ms || 0);
+      const loadMs = Number(stt.load_ms || 0);
+      const backend = String(stt.bound_backend || stt.device || '').toUpperCase();
       const sttInfo = stt.backend === 'lan'
         ? 'WHISPER LAN'
-        : sttMs > 0 ? `WHISPER ${Math.round(sttMs)}ms` : 'WHISPER LOCAL';
+        : `HANDY ${backend || 'VULKAN'} · ${Math.round(inferMs || Number(stt.duration_ms || 0))}ms`;
       setUi('THINKING…', sttInfo, true);
       setCore('thinking');
+      if (loadMs > 0) console.info(`[SHINO-OS] Handy load ${Math.round(loadMs)}ms, infer ${Math.round(inferMs)}ms`);
       if (!window.SHINOChat?.sendText) throw new Error('chat bridge unavailable');
       const answer = await window.SHINOChat.sendText(text, { deferIdle: true, noFocus: true });
       if (!answer) throw new Error('empty assistant response');
@@ -309,17 +287,14 @@
       setCore('speaking');
       const audio = await synthesize(answer);
       await playAudio(audio);
-      setUi('VOICE READY', stt.backend === 'lan' ? 'LAN + PIPER' : 'LOCAL + PIPER', false);
+      setUi('VOICE READY', stt.backend === 'lan' ? 'LAN + PIPER' : 'HANDY + PIPER', false);
       setCore('idle');
     } catch (err) {
       console.error('[SHINO-OS] Local voice turn failed:', err);
-      setUi('VOICE ERROR', 'LOCAL ERR', false);
+      setUi('VOICE ERROR', 'HANDY ERR', false);
       setCore('error');
       notify(`Voix locale: ${err.message || err}`, 'err');
-      setTimeout(() => {
-        setUi('VOICE READY', 'LOCAL', false);
-        setCore('idle');
-      }, 1800);
+      setTimeout(() => { setUi('VOICE READY', 'HANDY READY', false); setCore('idle'); }, 1800);
     } finally {
       processing = false;
       chunks = [];
@@ -335,14 +310,12 @@
   async function refreshStatus() {
     try {
       const status = await fetchStatus();
-      const mode = status.stt === 'lan'
-        ? 'LAN READY'
-        : status.whisper_loaded ? 'LOCAL READY' : 'LOCAL COLD';
-      setUi('VOICE READY', mode, false);
+      if (status.stt === 'lan') setUi('VOICE READY', 'LAN READY', false);
+      else if (status.handy_available) setUi('VOICE READY', 'HANDY · VULKAN', false);
+      else setUi('VOICE OFF', 'HANDY MISSING', false);
     } catch (_) {}
   }
 
-  // Capture phase intentionally wins over the legacy native LiveKit click handler.
   document.addEventListener('click', (event) => {
     const button = event.target?.closest?.('#sho-voice-btn');
     if (!button) return;
@@ -357,10 +330,7 @@
     if (root()) refreshStatus();
     else {
       const observer = new MutationObserver(() => {
-        if (root()) {
-          observer.disconnect();
-          refreshStatus();
-        }
+        if (root()) { observer.disconnect(); refreshStatus(); }
       });
       observer.observe(document.documentElement, { childList: true, subtree: true });
     }
