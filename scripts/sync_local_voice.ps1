@@ -59,12 +59,14 @@ function Set-EnvValue([string]$Name, [string]$Value) {
   Set-Content -Path $EnvPath -Value $lines -Encoding UTF8
 }
 
-# SHINO local voice uses Jarvis' own faster-whisper + Piper engines.
-Set-EnvValue "STT_PROVIDER" "whisper"
-Set-EnvValue "WHISPER_MODEL" "small"
+# SHINO voice path: browser mic -> Handy headless/Vulkan -> Ollama -> Piper.
+# handy.exe is auto-detected under %LOCALAPPDATA%\Handy unless SHINO_HANDY_EXE overrides it.
+Set-EnvValue "SHINO_STT_BACKEND" "handy"
+Set-EnvValue "SHINO_HANDY_MODEL" "handy-computer/whisper-large-v3-turbo-gguf"
+Set-EnvValue "SHINO_HANDY_DEVICE_INDEX" "0"
 Set-EnvValue "TTS_PROVIDER" "piper"
 
-Write-Host "[SHINO-OS] Voix locale synchronisee: Whisper small + Ollama + Piper." -ForegroundColor Cyan
+Write-Host "[SHINO-OS] Voix locale synchronisee: Handy + Whisper Large V3 Turbo (device 0) + Ollama + Piper." -ForegroundColor Cyan
 if ($env:SHINO_STT_URL) {
   Write-Host "[SHINO-OS] Noeud STT LAN configure: $env:SHINO_STT_URL" -ForegroundColor Cyan
 }
