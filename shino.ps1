@@ -8,7 +8,6 @@ Set-StrictMode -Version Latest
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-# Jarvis embedded Python bundle must not live under OneDrive.
 if ($env:SHINO_RUNTIME_ROOT) {
   $RuntimeRoot = $env:SHINO_RUNTIME_ROOT
 } elseif ($env:LOCALAPPDATA) {
@@ -97,7 +96,7 @@ function Get-JarvisPort {
   $envPath = Join-Path $JarvisDir ".env"
 
   if (Test-Path $envPath) {
-    $line = Get-Content $envPath | Where-Object { $_ -match "^\s*PORT\s*=\s*\d+\s*$" } | Select-Object -First 1
+    $line = Get-Content $envPath -Encoding UTF8 | Where-Object { $_ -match "^\s*PORT\s*=\s*\d+\s*$" } | Select-Object -First 1
     if ($line -and ($line -match "=\s*(\d+)\s*$")) {
       $port = [int]$Matches[1]
     }
@@ -106,86 +105,68 @@ function Get-JarvisPort {
   return $port
 }
 
-function Test-JarvisHttpListener {
+function Set-JarvisPort {
   param([int]$Port)
 
-  try {
-    $uri = "http://127.0.0.1:$Port/api/setup/status"
-    $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 2 -ErrorAction Stop
-    if ($null -ne $response -and $null -ne $response.complete -and $null -ne $response.prerequisites) {
-      return $true
-    }
-  } catch {
-    return $false
+  $envPath = Join-Path $JarvisDir ".env"
+  if (-not (Test-Path $envPath)) {
+    throw "Fichier .env Jarvis introuvable: $envPath"
   }
 
-  return $false
+  $lines = @(Get-Content $envPath -Encoding UTF8)
+  $replaced = $false
+
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match "^\s*PORT\s*=") {
+      $lines[$i] = "PORT=$Port"
+      $replaced = $true
+      break
+    }
+  }
+
+  if (-not $replaced) {
+    $lines += "PORT=$Port"
+  }
+
+  Set-Content -Path $envPath -Value $lines -Encoding UTF8
 }
 
-function Clear-StaleJarvisListener {
+function Test-PortFree {
   param([int]$Port)
 
-  $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
-  if ($listeners.Count -eq 0) {
-    return
-  }
-
-  $listener = $listeners | Select-Object -First 1
-  $ownerProcessId = [int]$listener.OwningProcess
-  $procName = "PID $ownerProcessId"
-  $processPath = ""
-  $commandLine = ""
-
-  $basicProc = Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue
-  if ($null -ne $basicProc) {
-    if ($basicProc.ProcessName) { $procName = [string]$basicProc.ProcessName }
-    try {
-      if ($basicProc.Path) { $processPath = [string]$basicProc.Path }
-    } catch {
-      $processPath = ""
+  $probe = $null
+  try {
+    $probe = New-Object -TypeName System.Net.Sockets.TcpListener -ArgumentList @([System.Net.IPAddress]::Loopback, $Port)
+    $probe.Start()
+    return $true
+  } catch {
+    return $false
+  } finally {
+    if ($null -ne $probe) {
+      try { $probe.Stop() } catch { }
     }
   }
+}
 
-  $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerProcessId" -ErrorAction SilentlyContinue
-  if ($null -ne $cimProc) {
-    if ($cimProc.Name) { $procName = [string]$cimProc.Name }
-    if ($cimProc.CommandLine) { $commandLine = [string]$cimProc.CommandLine }
-    if (-not $processPath -and $cimProc.ExecutablePath) { $processPath = [string]$cimProc.ExecutablePath }
+function Ensure-FreeJarvisPort {
+  $configuredPort = Get-JarvisPort
+  if (Test-PortFree -Port $configuredPort) {
+    return $configuredPort
   }
 
-  $jarvisPath = [IO.Path]::GetFullPath($JarvisDir).TrimEnd([char]92)
-  $looksLikeJarvis = Test-JarvisHttpListener -Port $Port
+  $candidate = $configuredPort + 1
+  $limit = [Math]::Min(65535, $configuredPort + 50)
 
-  if (-not $looksLikeJarvis -and $commandLine -and ($commandLine.IndexOf($jarvisPath, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
-    $looksLikeJarvis = $true
-  }
-  if (-not $looksLikeJarvis -and $processPath -and ($processPath.IndexOf($jarvisPath, [StringComparison]::OrdinalIgnoreCase) -eq 0)) {
-    $looksLikeJarvis = $true
-  }
-  if (-not $looksLikeJarvis -and $commandLine -match "(?i)jarvis") {
-    $looksLikeJarvis = $true
-  }
-
-  if (-not $looksLikeJarvis) {
-    $detail = $commandLine
-    if (-not $detail) { $detail = $processPath }
-    if (-not $detail) { $detail = "commande inconnue" }
-    throw "Port $Port occupe par un autre processus: $procName (PID $ownerProcessId). $detail"
-  }
-
-  Write-Shino "Ancienne instance Jarvis detectee sur le port $Port (PID $ownerProcessId) - arret..."
-  Stop-Process -Id $ownerProcessId -Force -ErrorAction Stop
-
-  for ($i = 0; $i -lt 30; $i++) {
-    Start-Sleep -Milliseconds 100
-    $stillListening = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue)
-    if ($stillListening.Count -eq 0) {
-      Write-Shino "Port $Port libere."
-      return
+  while ($candidate -le $limit) {
+    if (Test-PortFree -Port $candidate) {
+      Set-JarvisPort -Port $candidate
+      Write-Shino "Port $configuredPort occupe; Jarvis bascule automatiquement sur $candidate."
+      return $candidate
     }
+    $candidate++
   }
 
-  throw "Le processus Jarvis PID $ownerProcessId a ete arrete mais le port $Port reste occupe."
+  throw "Aucun port libre trouve entre $($configuredPort + 1) et $limit."
 }
 
 function Sync-ShinoInstalledViews {
@@ -238,8 +219,8 @@ function Invoke-Jarvis([string]$JarvisCommand) {
   }
 
   if ($JarvisCommand -in @("run", "api")) {
-    $jarvisPort = Get-JarvisPort
-    Clear-StaleJarvisListener -Port $jarvisPort
+    $activePort = Ensure-FreeJarvisPort
+    Write-Shino "Port Jarvis: $activePort"
   }
 
   Sync-ShinoInstalledViews
@@ -254,8 +235,7 @@ function Invoke-Jarvis([string]$JarvisCommand) {
   try {
     & $launcher $JarvisCommand
     $code = $LASTEXITCODE
-  }
-  finally {
+  } finally {
     Pop-Location
   }
   exit $code
@@ -276,6 +256,7 @@ function Show-Status {
     if ($branch -eq "HEAD") { $branch = "(detached)" }
     Write-Shino "Runtime Jarvis: $sha $branch"
     Write-Shino "Au pin: $($sha -eq $lock.ref)"
+    Write-Shino "Port configure: $(Get-JarvisPort)"
     Write-Shino "Bundle present: $(Test-Path (Join-Path $JarvisDir "bundle\manifest.json"))"
     Write-Shino ".env present: $(Test-Path (Join-Path $JarvisDir ".env"))"
     Write-Shino "Command Center stage: $(Test-Path (Join-Path $JarvisDir "skills_data\installed\shino-command-center\skill.yaml"))"
