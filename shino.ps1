@@ -171,11 +171,10 @@ function Show-Status {
 
   if (Test-Path (Join-Path $JarvisDir '.git')) {
     $sha = (git -C $JarvisDir rev-parse HEAD).Trim()
-    # `git branch --show-current` intentionally prints nothing on a detached HEAD.
-    # Coerce that empty output to a string before Trim so StrictMode never sees $null.
-    $branch = [string](git -C $JarvisDir branch --show-current)
-    $branch = $branch.Trim()
-    if (-not $branch) { $branch = '(detached)' }
+    # Unlike `git branch --show-current`, this always emits text:
+    # a branch name when attached, or the literal `HEAD` when detached.
+    $branch = (git -C $JarvisDir rev-parse --abbrev-ref HEAD).Trim()
+    if ($branch -eq 'HEAD') { $branch = '(detached)' }
     Write-Shino "Runtime Jarvis: $sha $branch"
     Write-Shino "Au pin: $($sha -eq $lock.ref)"
     Write-Shino "Bundle présent: $(Test-Path (Join-Path $JarvisDir 'bundle\manifest.json'))"
