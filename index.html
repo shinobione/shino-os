@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SHINO-OS</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar panel-line">
+      <div class="brand-wrap">
+        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <div>
+          <div class="brand">SHINO-OS</div>
+          <div class="brand-sub">PERSONAL AI ASSISTANT</div>
+        </div>
+      </div>
+
+      <div class="clock-wrap">
+        <span id="dateLabel">JEUDI 03 SEPTEMBRE 2026</span>
+        <span class="divider"></span>
+        <strong id="clockLabel">20:51:00</strong>
+      </div>
+
+      <div class="top-metrics">
+        <div class="micro-metric"><span>CPU</span><strong id="cpuTop">8%</strong><i></i></div>
+        <div class="micro-metric"><span>RAM</span><strong>32%</strong><i></i></div>
+        <div class="micro-metric"><span>STORAGE</span><strong>41%</strong><i></i></div>
+        <div class="online-pill"><b></b><span>SHINO<br><em>SYSTEM ONLINE</em></span></div>
+      </div>
+    </header>
+
+    <aside class="rail">
+      <button class="rail-btn active" data-section="home" title="Accueil">⌂</button>
+      <button class="rail-btn" data-section="chat" title="Conversation">◌</button>
+      <button class="rail-btn" data-section="skills" title="Skills">▦</button>
+      <button class="rail-btn" data-section="metrics" title="Métriques">╱╲</button>
+      <button class="rail-btn" data-section="network" title="Réseau">◎</button>
+      <button class="rail-btn" data-section="terminal" title="Terminal">›_</button>
+      <div class="build">v0.1.0 <b></b><small>ULTRAWIDE SHELL</small></div>
+    </aside>
+
+    <main class="dashboard">
+      <section class="conversation panel">
+        <div class="panel-title"><span>CONVERSATION</span><em><b></b> EN LIGNE</em></div>
+        <div id="chatLog" class="chat-log">
+          <article class="bubble user"><div><b>Toi</b><time>20:51</time></div><p>prépare ma tournée RISO de demain</p></article>
+          <article class="bubble assistant"><div><b>Shino</b><time>20:51</time></div><p>J’ai trouvé 4 interventions et préparé le résumé opérationnel.</p><button>VOIR LE RÉSUMÉ ›</button></article>
+          <article class="bubble user"><div><b>Toi</b><time>20:51</time></div><p>envoie le rapport par email à mon équipe</p></article>
+          <article class="bubble assistant"><div><b>Shino</b><time>20:51</time></div><p>C’est fait. Le rapport a été préparé pour envoi.</p><span class="success">✓ ACTION PRÊTE</span></article>
+        </div>
+        <form id="chatForm" class="chat-input">
+          <input id="chatInput" autocomplete="off" placeholder="Écrire un message..." />
+          <button type="submit" aria-label="Envoyer">➤</button>
+          <button type="button" id="voiceButton" class="voice-button" aria-label="Micro">≋</button>
+        </form>
+      </section>
+
+      <section class="left-widgets">
+        <div class="panel recent">
+          <div class="panel-title"><span>ACTIONS RÉCENTES</span><small>›</small></div>
+          <ul>
+            <li><span>▱ Rapport RISO</span><time>20:49</time></li>
+            <li><span>✉ Email équipe</span><time>20:47</time></li>
+            <li><span>▣ Analyse système</span><time>20:43</time></li>
+            <li><span>♫ Playlist Focus</span><time>20:39</time></li>
+          </ul>
+          <button class="text-btn">VOIR TOUT ›</button>
+        </div>
+
+        <div class="panel gpu-panel">
+          <div class="panel-title"><span>CHARGE GPU</span></div>
+          <div class="gpu-row"><span>3070 Ti</span><canvas id="gpu3070" width="210" height="42"></canvas><strong id="gpu3070Value">62%</strong></div>
+          <div class="gpu-row"><span>3060</span><canvas id="gpu3060" width="210" height="42"></canvas><strong id="gpu3060Value">18%</strong></div>
+        </div>
+
+        <div class="panel focus-panel">
+          <div class="panel-title"><span>MODE ACTUEL</span></div>
+          <div class="focus-line"><div class="mini-ring"></div><div><strong>FOCUS</strong><span>Productivité maximale</span></div><b>›</b></div>
+        </div>
+      </section>
+
+      <section class="core-zone">
+        <div class="core-wrap" id="coreWrap">
+          <div class="orbit orbit-a"></div>
+          <div class="orbit orbit-b"></div>
+          <div class="orbit orbit-c"></div>
+          <div class="core-glow"></div>
+          <div class="core-sphere">
+            <div class="core-grid"></div>
+            <div class="core-logo"><span></span></div>
+          </div>
+          <div class="tick-ring"></div>
+        </div>
+        <canvas id="voiceWave" class="voice-wave" width="850" height="90"></canvas>
+        <div class="service-line" id="serviceLine">À VOTRE SERVICE.</div>
+      </section>
+
+      <section class="brain-column">
+        <div class="panel brain-panel">
+          <div class="panel-title"><span>BRAIN MODE</span></div>
+          <button class="brain-option" data-brain="CHATGPT"><span class="brain-icon">✦</span><div><strong>CHATGPT</strong><small>OpenAI</small></div><i></i></button>
+          <button class="brain-option active" data-brain="LOCAL"><span class="brain-icon">⌘</span><div><strong>LOCAL</strong><small>LAN / Ollama</small></div><i></i></button>
+          <button class="brain-option" data-brain="CLOUD"><span class="brain-icon">☁</span><div><strong>CLOUD</strong><small>Fallback</small></div><i></i></button>
+        </div>
+
+        <div class="panel skills-panel">
+          <div class="panel-title"><span>SKILLS</span><small>›</small></div>
+          <ul>
+            <li><span>RISO ASSISTANT</span><em><b></b> ACTIVE</em></li>
+            <li><span>MUSIC / A&R</span><em><b></b> ACTIVE</em></li>
+            <li><span>DEV HELPER</span><em><b></b> ACTIVE</em></li>
+            <li><span>FILE MANAGER</span><em><b></b> ACTIVE</em></li>
+            <li><span>SYSTEM ANALYZER</span><em><b></b> ACTIVE</em></li>
+          </ul>
+          <button class="text-btn">GÉRER LES SKILLS ›</button>
+        </div>
+      </section>
+
+      <section class="system-column panel">
+        <div class="panel-title"><span>SYSTÈME</span></div>
+        <div class="system-card"><div class="sys-icon">▣</div><div class="sys-copy"><strong>3070 Ti</strong><span class="ok">ONLINE</span></div><div class="sys-stat"><span id="temp3070">62°C</span><strong id="load3070">62%</strong><i><b id="bar3070" style="width:62%"></b></i></div></div>
+        <div class="system-card"><div class="sys-icon">◇</div><div class="sys-copy"><strong>3060</strong><span>READY</span></div><div class="sys-stat"><span id="temp3060">48°C</span><strong id="load3060">18%</strong><i><b id="bar3060" style="width:18%"></b></i></div></div>
+        <div class="system-card"><div class="sys-icon">▤</div><div class="sys-copy"><strong>MEMORY</strong><span class="ok">ONLINE</span></div><div class="sys-stat"><span>10.2 / 31.9 GB</span><strong>32%</strong><i><b style="width:32%"></b></i></div></div>
+        <div class="system-card"><div class="sys-icon">♩</div><div class="sys-copy"><strong>VOICE</strong><span class="ok" id="voiceStatus">ACTIVE</span></div><div class="mini-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+        <div class="system-card"><div class="sys-icon">⌁</div><div class="sys-copy"><strong>NETWORK</strong><span class="ok">OK</span></div><div class="network-rate"><span>↓ 150 Mbps</span><span>↑ 98 Mbps</span></div></div>
+      </section>
+    </main>
+
+    <nav class="dock panel-line">
+      <button class="dock-item active" data-mode="RISO"><span>▣</span><div><strong>RISO</strong><small>OPERATIONS</small></div></button>
+      <button class="dock-item" data-mode="MUSIC"><span>♫</span><div><strong>MUSIC</strong><small>PLAYLISTS</small></div></button>
+      <button class="dock-item" data-mode="DEV"><span>&lt;/&gt;</span><div><strong>DEV</strong><small>DEVELOPMENT</small></div></button>
+      <button class="dock-item" data-mode="FILES"><span>□</span><div><strong>FILES</strong><small>DOCUMENTS</small></div></button>
+      <button class="dock-item" data-mode="PC"><span>▱</span><div><strong>PC</strong><small>SYSTEM</small></div></button>
+      <button class="dock-item" data-mode="SETTINGS"><span>⚙</span><div><strong>SETTINGS</strong><small>CONFIGURATION</small></div></button>
+      <button class="power" id="powerButton" title="Veille">◯</button>
+    </nav>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
