@@ -210,6 +210,13 @@ function Sync-ShinoInstalledViews {
   }
 }
 
+function Sync-LocalVoiceRuntime {
+  $script = Join-Path $Root "scripts\sync_local_voice.ps1"
+  if (-not (Test-Path $script)) { return }
+  $env:SHINO_RUNTIME_ROOT = $RuntimeRoot
+  & $script
+}
+
 function Invoke-Jarvis([string]$JarvisCommand) {
   Ensure-Upstream
   Set-ShinoEnvironment
@@ -224,6 +231,9 @@ function Invoke-Jarvis([string]$JarvisCommand) {
   }
 
   Sync-ShinoInstalledViews
+  if ($JarvisCommand -in @("run", "api")) {
+    Sync-LocalVoiceRuntime
+  }
 
   $launcher = Join-Path $JarvisDir "jarvis.bat"
   if (-not (Test-Path $launcher)) {
