@@ -88,6 +88,27 @@ def _write_pcm16_wav(pcm: bytes, path: Path) -> float:
     return float(pcm16.size) / 16_000.0
 
 
+def _run_handy_blocking(args: list[str], stdout_path: Path, stderr_path: Path) -> int:
+    """Run Handy with real file handles.
+
+    Handy's Windows release is built as a GUI-subsystem executable. Capturing its
+    stdout/stderr through asyncio PIPEs is unreliable on some Windows builds,
+    while explicit redirected file handles are reliable (and match PowerShell's
+    Start-Process -RedirectStandardOutput/-RedirectStandardError behaviour).
+    """
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
+        completed = subprocess.run(
+            args,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            timeout=_HANDY_TIMEOUT_SECONDS,
+            check=False,
+            creationflags=creationflags,
+        )
+    return int(completed.returncode)
+
+
 async def _run_handy(pcm: bytes) -> dict[str, object]:
     handy = _find_handy_exe()
     if handy is None:
@@ -97,24 +118,23 @@ async def _run_handy(pcm: bytes) -> dict[str, object]:
 
     model = _handy_model()
     device_index = _handy_device_index()
-    temp_path: Path | None = None
+    temp_dir = Path(tempfile.mkdtemp(prefix="shino-handy-"))
+    wav_path = temp_dir / "input.wav"
+    stdout_path = temp_dir / "stdout.txt"
+    stderr_path = temp_dir / "stderr.txt"
 
     try:
-        with tempfile.NamedTemporaryFile(prefix="shino-voice-", suffix=".wav", delete=False) as tmp:
-            temp_path = Path(tmp.name)
-        audio_secs = await asyncio.to_thread(_write_pcm16_wav, pcm, temp_path)
-
+        audio_secs = await asyncio.to_thread(_write_pcm16_wav, pcm, wav_path)
         args = [
             str(handy),
             "--transcribe-file",
-            str(temp_path),
+            str(wav_path),
             "--model",
             model,
             "--device-index",
             device_index,
             "--json",
         ]
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
         logger.info(
             "SHINO Handy STT start: model={}, device_index={}, audio={:.2f}s, exe={}",
             model,
@@ -123,45 +143,34 @@ async def _run_handy(pcm: bytes) -> dict[str, object]:
             handy,
         )
 
-        process = await asyncio.create_subprocess_exec(
-            *args,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            creationflags=creationflags,
-        )
         try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=_HANDY_TIMEOUT_SECONDS
+            returncode = await asyncio.to_thread(
+                _run_handy_blocking, args, stdout_path, stderr_path
             )
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.communicate()
-            raise RuntimeError(f"Handy timeout après {int(_HANDY_TIMEOUT_SECONDS)} s")
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"Handy timeout après {int(_HANDY_TIMEOUT_SECONDS)} s") from exc
 
-        stdout_text = stdout.decode("utf-8", errors="replace").strip()
-        stderr_text = stderr.decode("utf-8", errors="replace").strip()
-        if process.returncode != 0:
-            detail = stderr_text[-1200:] or stdout_text[-1200:] or "aucun détail"
-            raise RuntimeError(f"Handy exit {process.returncode}: {detail}")
+        stdout_text = stdout_path.read_text(encoding="utf-8", errors="replace").strip() if stdout_path.exists() else ""
+        stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip() if stderr_path.exists() else ""
+
+        if returncode != 0:
+            detail = stderr_text[-1600:] or stdout_text[-1600:] or "aucun détail"
+            raise RuntimeError(f"Handy exit {returncode}: {detail}")
         if not stdout_text:
-            detail = stderr_text[-800:] or "stdout vide"
+            detail = stderr_text[-1200:] or "stdout vide"
             raise RuntimeError(f"Handy n'a renvoyé aucun JSON: {detail}")
 
         try:
             payload = json.loads(stdout_text)
         except json.JSONDecodeError as exc:
-            raise RuntimeError(f"JSON Handy invalide: {stdout_text[-800:]}") from exc
+            raise RuntimeError(f"JSON Handy invalide: {stdout_text[-1200:]}") from exc
 
         text = str(payload.get("text") or "").strip()
         payload["text"] = text
         payload["audio_secs"] = float(payload.get("audio_secs") or audio_secs)
         return payload
     finally:
-        if temp_path is not None:
-            try:
-                temp_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 @router.get("/status")
