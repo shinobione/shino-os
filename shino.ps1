@@ -7,7 +7,18 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RuntimeRoot = Join-Path $Root '.runtime'
+
+# Jarvis' embedded Python/venv bundle must NOT live under OneDrive.
+# SHINO-OS itself may live in a synced Git folder, but the runtime is deliberately
+# stored outside the repo. Override with SHINO_RUNTIME_ROOT if ever needed.
+if ($env:SHINO_RUNTIME_ROOT) {
+  $RuntimeRoot = $env:SHINO_RUNTIME_ROOT
+} elseif ($env:LOCALAPPDATA) {
+  $RuntimeRoot = Join-Path $env:LOCALAPPDATA 'SHINO-OS\runtime'
+} else {
+  $RuntimeRoot = Join-Path $env:USERPROFILE '.shino-os\runtime'
+}
+
 $JarvisDir = Join-Path $RuntimeRoot 'jarvis-OS'
 $LockPath = Join-Path $Root 'UPSTREAM.lock'
 $ExtensionsRoot = Join-Path $Root 'extensions'
@@ -32,8 +43,12 @@ function Ensure-Upstream {
   $lock = Read-UpstreamLock
   New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
 
+  if ($JarvisDir -match '(?i)[\\/]OneDrive[\\/]') {
+    throw "Runtime Jarvis refusé sous OneDrive: $JarvisDir. Définis SHINO_RUNTIME_ROOT vers un dossier local hors OneDrive."
+  }
+
   if (-not (Test-Path (Join-Path $JarvisDir '.git'))) {
-    Write-Shino 'Clonage de Jarvis OS dans .runtime...'
+    Write-Shino "Clonage de Jarvis OS hors OneDrive: $JarvisDir"
     git clone $lock.repository $JarvisDir
     if ($LASTEXITCODE -ne 0) { throw 'Échec du clone de Jarvis OS.' }
 
@@ -46,6 +61,7 @@ function Ensure-Upstream {
 
 function Set-ShinoEnvironment {
   # Jarvis natively scans this root for skills/, presets/ and views/.
+  # These lightweight extension sources can remain in the SHINO-OS Git repo.
   $env:JARVIS_DEV_EXTENSIONS_DIR = $ExtensionsRoot
   $env:SHINO_OS_ROOT = $Root
   $env:SHINO_OS = '1'
@@ -71,8 +87,10 @@ function Invoke-Jarvis([string]$JarvisCommand) {
 function Show-Status {
   Require-Git
   $lock = Read-UpstreamLock
-  Write-Shino "Root: $Root"
+  Write-Shino "Root SHINO: $Root"
   Write-Shino "Extensions: $ExtensionsRoot"
+  Write-Shino "Runtime root: $RuntimeRoot"
+  Write-Shino "Jarvis runtime: $JarvisDir"
   Write-Shino "Upstream pin: $($lock.ref)"
 
   if (Test-Path (Join-Path $JarvisDir '.git')) {
