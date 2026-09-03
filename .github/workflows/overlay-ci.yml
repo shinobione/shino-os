@@ -37,3 +37,18 @@ jobs:
             exit 1
           }
           Write-Host "shino.ps1 parse: OK"
+      - name: Smoke status on detached HEAD runtime
+        shell: powershell
+        run: |
+          $env:SHINO_RUNTIME_ROOT = Join-Path $env:RUNNER_TEMP 'shino-runtime'
+          $jarvis = Join-Path $env:SHINO_RUNTIME_ROOT 'jarvis-OS'
+          New-Item -ItemType Directory -Force -Path $jarvis | Out-Null
+          git init $jarvis
+          git -C $jarvis config user.email 'ci@shino.local'
+          git -C $jarvis config user.name 'SHINO CI'
+          Set-Content -Path (Join-Path $jarvis 'README.md') -Value 'detached-head-smoke'
+          git -C $jarvis add README.md
+          git -C $jarvis commit -m 'smoke fixture'
+          $sha = (git -C $jarvis rev-parse HEAD).Trim()
+          git -C $jarvis checkout --detach $sha
+          .\shino.ps1 status
