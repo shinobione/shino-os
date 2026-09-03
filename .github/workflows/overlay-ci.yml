@@ -39,21 +39,29 @@ jobs:
             }
             Write-Host "$file parse: OK"
           }
-      - name: Smoke persistent global navigation sync
+      - name: Smoke legacy global navigation cleanup
         shell: powershell
         run: |
           $env:SHINO_RUNTIME_ROOT = Join-Path $env:RUNNER_TEMP 'shino-nav-runtime'
           $static = Join-Path $env:SHINO_RUNTIME_ROOT 'jarvis-OS\src\jarvis\interfaces\ui\static'
           New-Item -ItemType Directory -Force -Path $static | Out-Null
-          Set-Content -Path (Join-Path $static '_shared.js') -Value '(function(){ window.Jarvis = window.Jarvis || {}; })();' -Encoding UTF8
+          $fixture = @'
+          (function(){ window.Jarvis = window.Jarvis || {}; })();
+          /* SHINO_GLOBAL_NAV_LOADER_BEGIN */
+          old loader
+          /* SHINO_GLOBAL_NAV_LOADER_END */
+          '@
+          Set-Content -Path (Join-Path $static '_shared.js') -Value $fixture -Encoding UTF8
+          Set-Content -Path (Join-Path $static 'shino-global-nav.js') -Value 'legacy' -Encoding UTF8
+          Set-Content -Path (Join-Path $static 'shino-global-nav.css') -Value 'legacy' -Encoding UTF8
           .\scripts\sync_global_nav.ps1
           .\scripts\sync_global_nav.ps1
-          if (-not (Test-Path (Join-Path $static 'shino-global-nav.js'))) { throw 'global nav JS not copied' }
-          if (-not (Test-Path (Join-Path $static 'shino-global-nav.css'))) { throw 'global nav CSS not copied' }
+          if (Test-Path (Join-Path $static 'shino-global-nav.js')) { throw 'legacy global nav JS still present' }
+          if (Test-Path (Join-Path $static 'shino-global-nav.css')) { throw 'legacy global nav CSS still present' }
           $shared = Get-Content (Join-Path $static '_shared.js') -Raw
           $count = ([regex]::Matches($shared, 'SHINO_GLOBAL_NAV_LOADER_BEGIN')).Count
-          if ($count -ne 1) { throw "global nav loader expected once, got $count" }
-          Write-Host 'persistent global navigation sync: OK'
+          if ($count -ne 0) { throw "legacy global nav loader expected zero, got $count" }
+          Write-Host 'legacy global navigation cleanup: OK'
       - name: Smoke status on detached HEAD runtime
         shell: powershell
         run: |
