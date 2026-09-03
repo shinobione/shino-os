@@ -3,10 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#020912" />
   <title>SHINO-OS</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
-<body>
+<body data-core-state="idle">
+  <div class="ambient ambient-a"></div>
+  <div class="ambient ambient-b"></div>
+
   <div class="app-shell">
     <header class="topbar panel-line">
       <div class="brand-wrap">
@@ -38,7 +42,7 @@
       <button class="rail-btn" data-section="metrics" title="Métriques">╱╲</button>
       <button class="rail-btn" data-section="network" title="Réseau">◎</button>
       <button class="rail-btn" data-section="terminal" title="Terminal">›_</button>
-      <div class="build">v0.1.0 <b></b><small>ULTRAWIDE SHELL</small></div>
+      <div class="build">v0.1.1 <b></b><small>3440 NATIVE</small></div>
     </aside>
 
     <main class="dashboard">
@@ -71,8 +75,8 @@
 
         <div class="panel gpu-panel">
           <div class="panel-title"><span>CHARGE GPU</span></div>
-          <div class="gpu-row"><span>3070 Ti</span><canvas id="gpu3070" width="210" height="42"></canvas><strong id="gpu3070Value">62%</strong></div>
-          <div class="gpu-row"><span>3060</span><canvas id="gpu3060" width="210" height="42"></canvas><strong id="gpu3060Value">18%</strong></div>
+          <div class="gpu-row"><span>3070 Ti</span><canvas id="gpu3070" width="260" height="54"></canvas><strong id="gpu3070Value">62%</strong></div>
+          <div class="gpu-row"><span>3060</span><canvas id="gpu3060" width="260" height="54"></canvas><strong id="gpu3060Value">18%</strong></div>
         </div>
 
         <div class="panel focus-panel">
@@ -82,34 +86,53 @@
       </section>
 
       <section class="core-zone">
-        <div class="core-wrap" id="coreWrap">
-          <div class="orbit orbit-a"></div>
-          <div class="orbit orbit-b"></div>
-          <div class="orbit orbit-c"></div>
+        <div class="core-horizon"></div>
+        <div class="core-status-cluster">
+          <span>CORE STATE</span>
+          <strong id="coreState">IDLE</strong>
+          <small>CLICK CORE · DEMO STATES</small>
+        </div>
+
+        <button class="core-wrap" id="coreWrap" type="button" aria-label="Faire défiler les états du core">
+          <div class="outer-halo halo-a"></div>
+          <div class="outer-halo halo-b"></div>
+          <div class="tick-ring tick-ring-outer"></div>
+          <div class="orbit orbit-a"><i></i><b></b></div>
+          <div class="orbit orbit-b"><i></i><b></b></div>
+          <div class="orbit orbit-c"><i></i><b></b></div>
+          <div class="orbit orbit-d"><i></i><b></b></div>
           <div class="core-glow"></div>
           <div class="core-sphere">
+            <div class="energy-shell"></div>
+            <div class="energy-filaments"></div>
             <div class="core-grid"></div>
             <div class="core-logo"><span></span></div>
           </div>
-          <div class="tick-ring"></div>
+          <div class="tick-ring tick-ring-inner"></div>
+          <div class="radial-label label-a">NEURAL</div>
+          <div class="radial-label label-b">SHINO CORE</div>
+          <div class="radial-label label-c">LINK 01</div>
+        </button>
+
+        <div class="wave-bed">
+          <canvas id="voiceWave" class="voice-wave" width="1100" height="110"></canvas>
         </div>
-        <canvas id="voiceWave" class="voice-wave" width="850" height="90"></canvas>
         <div class="service-line" id="serviceLine">À VOTRE SERVICE.</div>
       </section>
 
       <section class="brain-column">
         <div class="panel brain-panel">
-          <div class="panel-title"><span>BRAIN MODE</span></div>
-          <button class="brain-option" data-brain="CHATGPT"><span class="brain-icon">✦</span><div><strong>CHATGPT</strong><small>OpenAI</small></div><i></i></button>
+          <div class="panel-title"><span>BRAIN MODE</span><small id="brainStatus">LOCAL</small></div>
+          <button class="brain-option" data-brain="CHATGPT"><span class="brain-icon">✦</span><div><strong>CHATGPT</strong><small>OpenAI / primary</small></div><i></i></button>
           <button class="brain-option active" data-brain="LOCAL"><span class="brain-icon">⌘</span><div><strong>LOCAL</strong><small>LAN / Ollama</small></div><i></i></button>
           <button class="brain-option" data-brain="CLOUD"><span class="brain-icon">☁</span><div><strong>CLOUD</strong><small>Fallback</small></div><i></i></button>
         </div>
 
         <div class="panel skills-panel">
-          <div class="panel-title"><span>SKILLS</span><small>›</small></div>
+          <div class="panel-title"><span>SKILLS</span><small>5 ONLINE</small></div>
           <ul>
             <li><span>RISO ASSISTANT</span><em><b></b> ACTIVE</em></li>
-            <li><span>MUSIC / A&R</span><em><b></b> ACTIVE</em></li>
+            <li><span>MUSIC / A&amp;R</span><em><b></b> ACTIVE</em></li>
             <li><span>DEV HELPER</span><em><b></b> ACTIVE</em></li>
             <li><span>FILE MANAGER</span><em><b></b> ACTIVE</em></li>
             <li><span>SYSTEM ANALYZER</span><em><b></b> ACTIVE</em></li>
@@ -119,11 +142,11 @@
       </section>
 
       <section class="system-column panel">
-        <div class="panel-title"><span>SYSTÈME</span></div>
-        <div class="system-card"><div class="sys-icon">▣</div><div class="sys-copy"><strong>3070 Ti</strong><span class="ok">ONLINE</span></div><div class="sys-stat"><span id="temp3070">62°C</span><strong id="load3070">62%</strong><i><b id="bar3070" style="width:62%"></b></i></div></div>
-        <div class="system-card"><div class="sys-icon">◇</div><div class="sys-copy"><strong>3060</strong><span>READY</span></div><div class="sys-stat"><span id="temp3060">48°C</span><strong id="load3060">18%</strong><i><b id="bar3060" style="width:18%"></b></i></div></div>
+        <div class="panel-title"><span>SYSTÈME</span><small>LIVE / MOCK</small></div>
+        <div class="system-card"><div class="sys-icon">▣</div><div class="sys-copy"><strong>3070 Ti</strong><span class="ok">ONLINE · LAN</span></div><div class="sys-stat"><span id="temp3070">62°C</span><strong id="load3070">62%</strong><i><b id="bar3070" style="width:62%"></b></i></div></div>
+        <div class="system-card"><div class="sys-icon">◇</div><div class="sys-copy"><strong>3060</strong><span>READY · LOCAL</span></div><div class="sys-stat"><span id="temp3060">48°C</span><strong id="load3060">18%</strong><i><b id="bar3060" style="width:18%"></b></i></div></div>
         <div class="system-card"><div class="sys-icon">▤</div><div class="sys-copy"><strong>MEMORY</strong><span class="ok">ONLINE</span></div><div class="sys-stat"><span>10.2 / 31.9 GB</span><strong>32%</strong><i><b style="width:32%"></b></i></div></div>
-        <div class="system-card"><div class="sys-icon">♩</div><div class="sys-copy"><strong>VOICE</strong><span class="ok" id="voiceStatus">ACTIVE</span></div><div class="mini-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+        <div class="system-card"><div class="sys-icon">♩</div><div class="sys-copy"><strong>VOICE</strong><span class="ok" id="voiceStatus">ACTIVE</span></div><div class="mini-wave"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
         <div class="system-card"><div class="sys-icon">⌁</div><div class="sys-copy"><strong>NETWORK</strong><span class="ok">OK</span></div><div class="network-rate"><span>↓ 150 Mbps</span><span>↑ 98 Mbps</span></div></div>
       </section>
     </main>
