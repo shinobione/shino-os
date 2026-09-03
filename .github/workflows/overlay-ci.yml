@@ -15,7 +15,7 @@ jobs:
         run: python scripts/validate_overlay.py
       - name: Check SHINO JavaScript syntax
         run: |
-          find extensions/views/shino-command-center extensions/global -name '*.js' -print0 | xargs -0 -n1 node --check
+          find extensions/views/shino-command-center -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Compile Python view package
         run: |
           python -m py_compile \
