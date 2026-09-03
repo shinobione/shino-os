@@ -1,0 +1,35 @@
+name: SHINO Overlay CI
+
+on:
+  push:
+    branches: [integration/jarvis-upstream]
+  pull_request:
+    branches: [main]
+
+jobs:
+  overlay-static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate SHINO overlay
+        run: python scripts/validate_overlay.py
+      - name: Check command-center JavaScript syntax
+        run: node --check extensions/views/shino-command-center/view.js
+      - name: Compile Python view tool
+        run: python -m py_compile extensions/views/shino-command-center/tool.py
+
+  windows-launcher:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse PowerShell launcher
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\shino.ps1), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+          Write-Host "shino.ps1 parse: OK"
