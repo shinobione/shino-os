@@ -33,21 +33,15 @@ function Ensure-Upstream {
   New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
 
   if (-not (Test-Path (Join-Path $JarvisDir '.git'))) {
-    Write-Shino "Clonage de Jarvis OS dans .runtime..."
+    Write-Shino 'Clonage de Jarvis OS dans .runtime...'
     git clone $lock.repository $JarvisDir
     if ($LASTEXITCODE -ne 0) { throw 'Échec du clone de Jarvis OS.' }
-  }
 
-  Push-Location $JarvisDir
-  try {
-    git fetch origin --prune
-    if ($LASTEXITCODE -ne 0) { throw 'Échec du fetch upstream.' }
-
-    # Fresh installs are reproducible: checkout the version pinned by SHINO-OS.
-    git checkout --detach $lock.ref
+    # Only a fresh runtime is forced to the reproducible pin.
+    git -C $JarvisDir checkout --detach $lock.ref
     if ($LASTEXITCODE -ne 0) { throw "Impossible de checkout le commit upstream $($lock.ref)." }
+    Write-Shino "Runtime initial verrouillé sur $($lock.ref)."
   }
-  finally { Pop-Location }
 }
 
 function Set-ShinoEnvironment {
@@ -68,9 +62,10 @@ function Invoke-Jarvis([string]$JarvisCommand) {
   Push-Location $JarvisDir
   try {
     & $launcher $JarvisCommand
-    exit $LASTEXITCODE
+    $code = $LASTEXITCODE
   }
   finally { Pop-Location }
+  exit $code
 }
 
 function Show-Status {
@@ -83,8 +78,9 @@ function Show-Status {
   if (Test-Path (Join-Path $JarvisDir '.git')) {
     $sha = (git -C $JarvisDir rev-parse HEAD).Trim()
     $branch = (git -C $JarvisDir branch --show-current).Trim()
-    if (-not $branch) { $branch = '(detached / pinned)' }
+    if (-not $branch) { $branch = '(detached)' }
     Write-Shino "Runtime Jarvis: $sha $branch"
+    Write-Shino "Au pin: $($sha -eq $lock.ref)"
     Write-Shino "Bundle présent: $(Test-Path (Join-Path $JarvisDir 'bundle'))"
     Write-Shino ".env présent: $(Test-Path (Join-Path $JarvisDir '.env'))"
   } else {
@@ -94,9 +90,7 @@ function Show-Status {
 
 function Update-Upstream {
   Require-Git
-  if (-not (Test-Path (Join-Path $JarvisDir '.git'))) {
-    Ensure-Upstream
-  }
+  Ensure-Upstream
 
   Write-Shino 'Mise à jour volontaire vers origin/main...'
   git -C $JarvisDir fetch origin --prune
@@ -105,7 +99,7 @@ function Update-Upstream {
   if ($LASTEXITCODE -ne 0) { throw 'Échec du checkout origin/main.' }
   $sha = (git -C $JarvisDir rev-parse HEAD).Trim()
   Write-Shino "Runtime mis à jour: $sha"
-  Write-Shino 'Note: les nouveaux installs restent sur UPSTREAM.lock tant que ce fichier n’est pas bumpé dans le repo.'
+  Write-Shino 'Les futurs run gardent ce commit. Les nouveaux installs restent sur UPSTREAM.lock jusqu’au prochain bump du repo.'
 }
 
 switch ($Command) {
