@@ -42,7 +42,7 @@
       <button class="rail-btn" data-section="metrics" title="Métriques">╱╲</button>
       <button class="rail-btn" data-section="network" title="Réseau">◎</button>
       <button class="rail-btn" data-section="terminal" title="Terminal">›_</button>
-      <div class="build">v0.1.1 <b></b><small>3440 NATIVE</small></div>
+      <div class="build">v0.1.2 <b></b><small>LIVING CORE</small></div>
     </aside>
 
     <main class="dashboard">
@@ -93,7 +93,7 @@
           <small>CLICK CORE · DEMO STATES</small>
         </div>
 
-        <button class="core-wrap" id="coreWrap" type="button" aria-label="Faire défiler les états du core">
+        <button class="core-wrap" id="coreWrap" type="button" aria-label="Faire défiler les états du core" style="width:min(36vw,78vh,940px)">
           <div class="outer-halo halo-a"></div>
           <div class="outer-halo halo-b"></div>
           <div class="tick-ring tick-ring-outer"></div>
@@ -103,10 +103,11 @@
           <div class="orbit orbit-d"><i></i><b></b></div>
           <div class="core-glow"></div>
           <div class="core-sphere">
-            <div class="energy-shell"></div>
-            <div class="energy-filaments"></div>
-            <div class="core-grid"></div>
-            <div class="core-logo"><span></span></div>
+            <canvas id="livingCore" aria-hidden="true" style="position:absolute;inset:0;width:100%;height:100%;z-index:8;pointer-events:none;mix-blend-mode:screen"></canvas>
+            <div class="energy-shell" style="opacity:.22"></div>
+            <div class="energy-filaments" style="opacity:.18"></div>
+            <div class="core-grid" style="opacity:.18"></div>
+            <div class="core-logo" style="z-index:12"><span></span></div>
           </div>
           <div class="tick-ring tick-ring-inner"></div>
           <div class="radial-label label-a">NEURAL</div>
