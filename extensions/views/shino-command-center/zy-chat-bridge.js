@@ -63,20 +63,21 @@
     }
   }
 
-  async function send(root) {
-    if (sending) return;
+  async function send(root, explicitText = null, options = {}) {
+    if (sending) return '';
     const input = root.querySelector('#sho-chat-input');
     const sendBtn = root.querySelector('#sho-chat-send');
     const log = root.querySelector('.sho-chatlog');
-    const text = (input?.value || '').trim();
-    if (!text || !log) return;
+    const text = String(explicitText == null ? (input?.value || '') : explicitText).trim();
+    if (!text || !log) return '';
 
     sending = true;
     if (sendBtn) sendBtn.disabled = true;
-    input.value = '';
+    if (input && explicitText == null) input.value = '';
     addMessage(log, 'user', text);
     const target = addMessage(log, 'assistant', '', true);
     setCore('thinking');
+    let full = '';
 
     try {
       const sessionId = localStorage.getItem(SESSION_KEY) || null;
@@ -89,10 +90,8 @@
       if (returnedSid) localStorage.setItem(SESSION_KEY, returnedSid);
       if (!resp.ok || !resp.body) throw new Error(`HTTP ${resp.status}`);
 
-      setCore('speaking');
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
-      let full = '';
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -100,16 +99,20 @@
         target.body.textContent = full;
         log.scrollTop = log.scrollHeight;
       }
+      full += decoder.decode();
+      target.body.textContent = full;
       target.wrap.classList.remove('streaming');
+      return full.trim();
     } catch (err) {
       target.wrap.classList.remove('streaming');
       target.body.textContent = `Erreur de communication avec Jarvis (${err.message || err}).`;
       setCore('error');
+      return '';
     } finally {
       sending = false;
       if (sendBtn) sendBtn.disabled = false;
-      setTimeout(() => setCore('idle'), 1000);
-      input?.focus();
+      if (!options.deferIdle) setTimeout(() => setCore('idle'), 1000);
+      if (!options.noFocus) input?.focus();
     }
   }
 
@@ -154,6 +157,15 @@
     }
     return false;
   }
+
+  window.SHINOChat = window.SHINOChat || {};
+  window.SHINOChat.sendText = async function (text, options = {}) {
+    const root = document.getElementById(ROOT_ID);
+    if (!root) return '';
+    if (!mounted) mount(root);
+    return send(root, text, options);
+  };
+  window.SHINOChat.isBusy = () => sending;
 
   if (!tryMount()) {
     const observer = new MutationObserver(() => {
