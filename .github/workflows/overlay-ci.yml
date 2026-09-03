@@ -16,11 +16,12 @@ jobs:
       - name: Check SHINO JavaScript syntax
         run: |
           find extensions/views/shino-command-center -name '*.js' -print0 | xargs -0 -n1 node --check
-      - name: Compile Python view package
+      - name: Compile Python overlay
         run: |
           python -m py_compile \
             extensions/views/shino-command-center/tool.py \
-            extensions/views/shino-command-center/skill.py
+            extensions/views/shino-command-center/skill.py \
+            runtime_overlay/jarvis/interfaces/api/shino_local_voice.py
 
   windows-launcher:
     runs-on: windows-latest
@@ -29,7 +30,7 @@ jobs:
       - name: Parse PowerShell launchers
         shell: powershell
         run: |
-          foreach ($file in @('.\shino.ps1', '.\scripts\sync_global_nav.ps1')) {
+          foreach ($file in @('.\shino.ps1', '.\scripts\sync_global_nav.ps1', '.\scripts\sync_local_voice.ps1')) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
@@ -62,6 +63,31 @@ jobs:
           $count = ([regex]::Matches($shared, 'SHINO_GLOBAL_NAV_LOADER_BEGIN')).Count
           if ($count -ne 0) { throw "legacy global nav loader expected zero, got $count" }
           Write-Host 'legacy global navigation cleanup: OK'
+      - name: Smoke local voice runtime sync
+        shell: powershell
+        run: |
+          $env:SHINO_RUNTIME_ROOT = Join-Path $env:RUNNER_TEMP 'shino-voice-runtime'
+          $jarvis = Join-Path $env:SHINO_RUNTIME_ROOT 'jarvis-OS'
+          $api = Join-Path $jarvis 'src\jarvis\interfaces\api'
+          New-Item -ItemType Directory -Force -Path $api | Out-Null
+          $appFixture = @'
+          from fastapi import FastAPI
+          app = FastAPI()
+          # ── [SURFACE] ───────────────────────────────────────────────
+          '@
+          Set-Content -Path (Join-Path $jarvis 'src\jarvis\app.py') -Value $appFixture -Encoding UTF8
+          Set-Content -Path (Join-Path $jarvis '.env') -Value @('STT_PROVIDER=deepgram','WHISPER_MODEL=tiny','TTS_PROVIDER=elevenlabs') -Encoding UTF8
+          .\scripts\sync_local_voice.ps1
+          .\scripts\sync_local_voice.ps1
+          $app = Get-Content (Join-Path $jarvis 'src\jarvis\app.py') -Raw
+          $count = ([regex]::Matches($app, 'SHINO_LOCAL_VOICE_BEGIN')).Count
+          if ($count -ne 1) { throw "local voice router marker expected once, got $count" }
+          if (-not (Test-Path (Join-Path $api 'shino_local_voice.py'))) { throw 'local voice router not copied' }
+          $envText = Get-Content (Join-Path $jarvis '.env') -Raw
+          if ($envText -notmatch 'STT_PROVIDER=whisper') { throw 'STT_PROVIDER not set to whisper' }
+          if ($envText -notmatch 'WHISPER_MODEL=small') { throw 'WHISPER_MODEL not set to small' }
+          if ($envText -notmatch 'TTS_PROVIDER=piper') { throw 'TTS_PROVIDER not set to piper' }
+          Write-Host 'local voice runtime sync: OK'
       - name: Smoke status on detached HEAD runtime
         shell: powershell
         run: |
