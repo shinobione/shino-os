@@ -1,0 +1,20 @@
+name: shino-command-center
+label: SHINO Command Center
+version: 0.2.1
+author: shinobione
+description: Cockpit SHINO-OS ultrawide alimenté par le moteur Jarvis.
+tags:
+  - shino
+  - view
+  - system
+  - ultrawide
+type: view
+static_files:
+  - view.js
+  - view.css
+  - zz-autostart.js
+requires_env: []
+requires_tools: []
+capabilities:
+  - system-monitoring
+  - llm-status
