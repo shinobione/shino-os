@@ -106,6 +106,22 @@ function Get-JarvisPort {
   return $port
 }
 
+function Test-JarvisHttpListener {
+  param([int]$Port)
+
+  try {
+    $uri = "http://127.0.0.1:$Port/api/setup/status"
+    $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 2 -ErrorAction Stop
+    if ($null -ne $response -and $null -ne $response.complete -and $null -ne $response.prerequisites) {
+      return $true
+    }
+  } catch {
+    return $false
+  }
+
+  return $false
+}
+
 function Clear-StaleJarvisListener {
   param([int]$Port)
 
@@ -116,34 +132,43 @@ function Clear-StaleJarvisListener {
 
   $listener = $listeners | Select-Object -First 1
   $ownerProcessId = [int]$listener.OwningProcess
-  $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerProcessId" -ErrorAction SilentlyContinue
-
   $procName = "PID $ownerProcessId"
+  $processPath = ""
   $commandLine = ""
-  $executablePath = ""
 
-  if ($null -ne $proc) {
-    if ($proc.Name) { $procName = [string]$proc.Name }
-    if ($proc.CommandLine) { $commandLine = [string]$proc.CommandLine }
-    if ($proc.ExecutablePath) { $executablePath = [string]$proc.ExecutablePath }
+  $basicProc = Get-Process -Id $ownerProcessId -ErrorAction SilentlyContinue
+  if ($null -ne $basicProc) {
+    if ($basicProc.ProcessName) { $procName = [string]$basicProc.ProcessName }
+    try {
+      if ($basicProc.Path) { $processPath = [string]$basicProc.Path }
+    } catch {
+      $processPath = ""
+    }
+  }
+
+  $cimProc = Get-CimInstance Win32_Process -Filter "ProcessId = $ownerProcessId" -ErrorAction SilentlyContinue
+  if ($null -ne $cimProc) {
+    if ($cimProc.Name) { $procName = [string]$cimProc.Name }
+    if ($cimProc.CommandLine) { $commandLine = [string]$cimProc.CommandLine }
+    if (-not $processPath -and $cimProc.ExecutablePath) { $processPath = [string]$cimProc.ExecutablePath }
   }
 
   $jarvisPath = [IO.Path]::GetFullPath($JarvisDir).TrimEnd([char]92)
-  $looksLikeJarvis = $false
+  $looksLikeJarvis = Test-JarvisHttpListener -Port $Port
 
-  if ($commandLine -and ($commandLine.IndexOf($jarvisPath, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
+  if (-not $looksLikeJarvis -and $commandLine -and ($commandLine.IndexOf($jarvisPath, [StringComparison]::OrdinalIgnoreCase) -ge 0)) {
     $looksLikeJarvis = $true
   }
-  if ($executablePath -and ($executablePath.IndexOf($jarvisPath, [StringComparison]::OrdinalIgnoreCase) -eq 0)) {
+  if (-not $looksLikeJarvis -and $processPath -and ($processPath.IndexOf($jarvisPath, [StringComparison]::OrdinalIgnoreCase) -eq 0)) {
     $looksLikeJarvis = $true
   }
-  if ($commandLine -match "(?i)jarvis") {
+  if (-not $looksLikeJarvis -and $commandLine -match "(?i)jarvis") {
     $looksLikeJarvis = $true
   }
 
   if (-not $looksLikeJarvis) {
     $detail = $commandLine
-    if (-not $detail) { $detail = $executablePath }
+    if (-not $detail) { $detail = $processPath }
     if (-not $detail) { $detail = "commande inconnue" }
     throw "Port $Port occupe par un autre processus: $procName (PID $ownerProcessId). $detail"
   }
