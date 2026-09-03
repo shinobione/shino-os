@@ -2,26 +2,29 @@
 
 Personal AI command center built as a **local overlay on top of Jarvis OS**.
 
-SHINO-OS does **not** vendor/copy the Jarvis OS codebase. The launcher clones a pinned Jarvis OS runtime into `.runtime/jarvis-OS` on the local machine, then exposes SHINO-specific views/skills through Jarvis' native `JARVIS_DEV_EXTENSIONS_DIR` mechanism.
+SHINO-OS does **not** vendor/copy the Jarvis OS codebase. The launcher clones a pinned Jarvis OS runtime **outside the Git repository and outside OneDrive**, then exposes SHINO-specific views/skills through Jarvis' native `JARVIS_DEV_EXTENSIONS_DIR` mechanism.
 
 ## Architecture
 
 ```text
-SHINO-OS repo
+SHINO-OS repo (may live in OneDrive/GitHub)
 ├─ shino.bat / shino.ps1        Windows launcher
 ├─ UPSTREAM.lock                reproducible Jarvis OS pin
-├─ extensions/
-│  ├─ views/
-│  │  └─ shino-command-center/  3440×1440 Jarvis-native UI
-│  ├─ skills/                   future RISO / SHINOBIWAN skills
-│  └─ presets/                  future SHINO automations
-└─ .runtime/                    local only, ignored by git
-   └─ jarvis-OS/                cloned upstream runtime
+└─ extensions/
+   ├─ views/
+   │  └─ shino-command-center/  3440×1440 Jarvis-native UI
+   ├─ skills/                   future RISO / SHINOBIWAN skills
+   └─ presets/                  future SHINO automations
+
+%LOCALAPPDATA%\SHINO-OS\runtime\
+└─ jarvis-OS\                   cloned upstream runtime + bundle + .env
 ```
 
 Jarvis OS supplies the engine: voice/LiveKit, memory kernel, mission engine, tools, proactive engine, permissions/governance, LLM providers and extension framework.
 
 SHINO-OS supplies the personality, ultrawide interface, domain skills and local hardware integration.
+
+The runtime location can be overridden with the `SHINO_RUNTIME_ROOT` environment variable, but the launcher refuses a runtime path under OneDrive because Jarvis' embedded Python/venv bundle relies on filesystem behavior OneDrive can break.
 
 ## Current upstream pin
 
@@ -42,9 +45,9 @@ From the SHINO-OS repository folder:
 .\shino.bat setup
 ```
 
-The first command reports whether the Jarvis runtime exists. `setup` clones Jarvis OS into `.runtime/` if required and opens/starts the standard Jarvis setup flow.
+The first command reports the external Jarvis runtime path. `setup` clones Jarvis OS into `%LOCALAPPDATA%\SHINO-OS\runtime\jarvis-OS` if required and then starts the standard Jarvis setup flow.
 
-Jarvis may then download its Windows bundle during its own setup. That bundle remains inside `.runtime/jarvis-OS` and is not committed to SHINO-OS.
+The SHINO repository itself may remain inside OneDrive. Only the Jarvis runtime/bundle is deliberately kept outside it.
 
 ## Run
 
