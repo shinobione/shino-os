@@ -9,6 +9,26 @@ const state = {
   phase: 0,
   gpu3070: 62,
   gpu3060: 18,
+  core: 'idle',
+  coreTimer: null,
+};
+
+const coreStates = ['idle', 'listening', 'thinking', 'speaking', 'working', 'error'];
+const coreCopy = {
+  idle: ['IDLE', 'À VOTRE SERVICE.'],
+  listening: ['LISTENING', 'JE VOUS ÉCOUTE.'],
+  thinking: ['THINKING', 'ANALYSE EN COURS.'],
+  speaking: ['SPEAKING', 'RÉPONSE EN COURS.'],
+  working: ['WORKING', 'EXÉCUTION.'],
+  error: ['ERROR', 'ANOMALIE DÉTECTÉE.'],
+};
+const wavePalette = {
+  idle: ['rgba(56,217,255,.58)', 'rgba(191,245,255,.96)'],
+  listening: ['rgba(86,255,209,.62)', 'rgba(208,255,244,1)'],
+  thinking: ['rgba(157,131,255,.65)', 'rgba(225,219,255,1)'],
+  speaking: ['rgba(72,221,255,.76)', 'rgba(235,253,255,1)'],
+  working: ['rgba(255,199,106,.60)', 'rgba(255,240,208,1)'],
+  error: ['rgba(255,91,113,.72)', 'rgba(255,216,222,1)'],
 };
 
 const months = ['JANVIER','FÉVRIER','MARS','AVRIL','MAI','JUIN','JUILLET','AOÛT','SEPTEMBRE','OCTOBRE','NOVEMBRE','DÉCEMBRE'];
@@ -24,6 +44,21 @@ function updateClock() {
   $('#dateLabel').textContent = `${days[now.getDay()]} ${pad(now.getDate())} ${months[now.getMonth()]} ${now.getFullYear()}`;
 }
 
+function setCoreState(name, message = null, duration = 0) {
+  if (!coreStates.includes(name)) return;
+  window.clearTimeout(state.coreTimer);
+  state.core = name;
+  document.body.dataset.coreState = name;
+  $('#coreState').textContent = coreCopy[name][0];
+  $('#serviceLine').textContent = message || coreCopy[name][1];
+
+  if (duration > 0) {
+    state.coreTimer = window.setTimeout(() => {
+      setCoreState(state.listening ? 'listening' : 'idle');
+    }, duration);
+  }
+}
+
 function drawGraph(canvas, base, amplitude, phaseOffset = 0) {
   const ctx = canvas.getContext('2d');
   const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
@@ -35,8 +70,8 @@ function drawGraph(canvas, base, amplitude, phaseOffset = 0) {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cssWidth, cssHeight);
-  ctx.strokeStyle = 'rgba(56,217,255,.85)';
-  ctx.lineWidth = 1.15;
+  ctx.strokeStyle = 'rgba(56,217,255,.86)';
+  ctx.lineWidth = 1.2;
   ctx.beginPath();
   for (let x = 0; x <= cssWidth; x += 4) {
     const t = x / cssWidth;
@@ -66,26 +101,33 @@ function drawVoiceWave() {
   }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
+
   const center = height / 2;
-  const active = state.listening ? 1.9 : 1;
+  const multipliers = { idle: .72, listening: 2.05, thinking: 1.45, speaking: 1.85, working: 1.15, error: 2.3 };
+  const active = multipliers[state.core] || 1;
+  const palette = wavePalette[state.core] || wavePalette.idle;
   const gradient = ctx.createLinearGradient(0, 0, width, 0);
   gradient.addColorStop(0, 'rgba(38,113,255,0)');
-  gradient.addColorStop(.2, 'rgba(56,217,255,.55)');
-  gradient.addColorStop(.5, 'rgba(191,245,255,.95)');
-  gradient.addColorStop(.8, 'rgba(56,217,255,.55)');
+  gradient.addColorStop(.18, palette[0]);
+  gradient.addColorStop(.5, palette[1]);
+  gradient.addColorStop(.82, palette[0]);
   gradient.addColorStop(1, 'rgba(38,113,255,0)');
+
   ctx.strokeStyle = gradient;
-  ctx.lineWidth = 1.2;
+  ctx.lineWidth = state.core === 'speaking' ? 1.65 : 1.25;
   ctx.beginPath();
   for (let x = 0; x <= width; x += 3) {
     const dist = Math.abs(x - width / 2) / (width / 2);
-    const envelope = Math.pow(1 - Math.min(1, dist), 2.2);
-    const signal = Math.sin(x * .12 + state.phase * 2.1) * 9 + Math.sin(x * .31 - state.phase * 1.4) * 4;
+    const envelope = Math.pow(1 - Math.min(1, dist), 2.05);
+    const complexity = state.core === 'thinking' ? 1.75 : state.core === 'error' ? 2.25 : 1;
+    const signal = Math.sin(x * .11 * complexity + state.phase * 2.15) * 10 + Math.sin(x * .29 - state.phase * 1.55) * 4.5;
     const y = center + signal * envelope * active;
     if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.stroke();
-  ctx.strokeStyle = 'rgba(61,181,255,.22)';
+
+  ctx.strokeStyle = 'rgba(61,181,255,.18)';
+  ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, center);
   ctx.lineTo(width, center);
@@ -111,7 +153,8 @@ function updateTelemetry() {
 }
 
 function tick() {
-  state.phase += .025;
+  const speed = state.core === 'thinking' ? .045 : state.core === 'error' ? .07 : state.core === 'speaking' ? .038 : .025;
+  state.phase += speed;
   drawGraph($('#gpu3070'), state.gpu3070, 17, 0);
   drawGraph($('#gpu3060'), state.gpu3060, 11, 1.7);
   drawVoiceWave();
@@ -132,14 +175,22 @@ function appendMessage(role, text) {
   $('#chatLog').scrollTop = $('#chatLog').scrollHeight;
 }
 
-function demoReply(text) {
+function chooseDemoReply(text) {
   const lower = text.toLowerCase();
-  let reply = 'Reçu. Le shell V0.1 est en mode démonstration : le moteur IA sera branché à l’étape suivante.';
-  if (lower.includes('riso')) reply = 'Mode RISO actif. Les connecteurs manuels, stock et tournée seront branchés ici.';
-  if (lower.includes('music') || lower.includes('suno')) reply = 'Mode MUSIC prêt. Le skill SHINOBIWAN prendra la main depuis ce panneau.';
-  if (lower.includes('gpu') || lower.includes('3070')) reply = 'Les jauges sont actuellement simulées. La télémétrie LAN 3060 / 3070 Ti est prévue au prochain branchement système.';
-  if (lower.includes('bonjour') || lower.includes('salut')) reply = 'À votre service. SHINO-OS V0.1 est en ligne.';
-  window.setTimeout(() => appendMessage('Shino', reply), 420);
+  if (lower.includes('riso')) return 'Mode RISO actif. Les connecteurs manuels, stock et tournée seront branchés ici.';
+  if (lower.includes('music') || lower.includes('suno')) return 'Mode MUSIC prêt. Le skill SHINOBIWAN prendra la main depuis ce panneau.';
+  if (lower.includes('gpu') || lower.includes('3070')) return 'Les jauges sont encore simulées. La télémétrie LAN 3060 / 3070 Ti arrive au prochain branchement système.';
+  if (lower.includes('bonjour') || lower.includes('salut')) return 'À votre service. SHINO-OS V0.1.1 est en ligne.';
+  return 'Reçu. Le shell V0.1.1 est en démonstration : le moteur IA sera branché après validation visuelle.';
+}
+
+function demoReply(text) {
+  setCoreState('thinking');
+  window.setTimeout(() => {
+    appendMessage('Shino', chooseDemoReply(text));
+    setCoreState('speaking');
+    window.setTimeout(() => setCoreState(state.listening ? 'listening' : 'idle'), 1050);
+  }, 680);
 }
 
 $('#chatForm').addEventListener('submit', (event) => {
@@ -156,8 +207,16 @@ $('#voiceButton').addEventListener('click', () => {
   state.listening = !state.listening;
   $('#voiceButton').classList.toggle('listening', state.listening);
   $('#voiceStatus').textContent = state.listening ? 'LISTENING' : 'ACTIVE';
-  $('#serviceLine').textContent = state.listening ? 'JE VOUS ÉCOUTE.' : 'À VOTRE SERVICE.';
-  $('#coreWrap').style.transform = state.listening ? 'scale(1.035)' : 'scale(1)';
+  setCoreState(state.listening ? 'listening' : 'idle');
+});
+
+$('#coreWrap').addEventListener('click', () => {
+  const current = coreStates.indexOf(state.core);
+  const next = coreStates[(current + 1) % coreStates.length];
+  state.listening = next === 'listening';
+  $('#voiceButton').classList.toggle('listening', state.listening);
+  $('#voiceStatus').textContent = state.listening ? 'LISTENING' : 'ACTIVE';
+  setCoreState(next);
 });
 
 $$('.brain-option').forEach((button) => {
@@ -165,8 +224,8 @@ $$('.brain-option').forEach((button) => {
     state.brain = button.dataset.brain;
     $$('.brain-option').forEach((item) => item.classList.remove('active'));
     button.classList.add('active');
-    $('#serviceLine').textContent = `${state.brain} SÉLECTIONNÉ.`;
-    window.setTimeout(() => $('#serviceLine').textContent = state.listening ? 'JE VOUS ÉCOUTE.' : 'À VOTRE SERVICE.', 1200);
+    $('#brainStatus').textContent = state.brain;
+    setCoreState('working', `${state.brain} SÉLECTIONNÉ.`, 1050);
   });
 });
 
@@ -175,8 +234,7 @@ $$('.dock-item').forEach((button) => {
     state.mode = button.dataset.mode;
     $$('.dock-item').forEach((item) => item.classList.remove('active'));
     button.classList.add('active');
-    $('#serviceLine').textContent = `MODE ${state.mode}.`;
-    window.setTimeout(() => $('#serviceLine').textContent = state.listening ? 'JE VOUS ÉCOUTE.' : 'À VOTRE SERVICE.', 1000);
+    setCoreState('working', `MODE ${state.mode}.`, 900);
   });
 });
 
@@ -184,14 +242,22 @@ $$('.rail-btn').forEach((button) => {
   button.addEventListener('click', () => {
     $$('.rail-btn').forEach((item) => item.classList.remove('active'));
     button.classList.add('active');
-    $('#serviceLine').textContent = button.title.toUpperCase();
+    setCoreState('working', button.title.toUpperCase(), 750);
   });
 });
 
 $('#powerButton').addEventListener('click', () => {
   state.sleeping = !state.sleeping;
   document.body.classList.toggle('sleeping', state.sleeping);
-  $('#serviceLine').textContent = state.sleeping ? 'MODE VEILLE.' : 'À VOTRE SERVICE.';
+  if (state.sleeping) {
+    state.listening = false;
+    $('#voiceButton').classList.remove('listening');
+    $('#voiceStatus').textContent = 'STANDBY';
+    setCoreState('idle', 'MODE VEILLE.');
+  } else {
+    $('#voiceStatus').textContent = 'ACTIVE';
+    setCoreState('idle');
+  }
 });
 
 window.addEventListener('keydown', (event) => {
@@ -203,10 +269,14 @@ window.addEventListener('keydown', (event) => {
     event.preventDefault();
     $('#voiceButton').click();
   }
+  if (event.key >= '1' && event.key <= '6' && document.activeElement !== $('#chatInput')) {
+    setCoreState(coreStates[Number(event.key) - 1]);
+  }
 });
 
 updateClock();
 updateTelemetry();
+setCoreState('idle');
 setInterval(updateClock, 1000);
 setInterval(updateTelemetry, 1800);
 requestAnimationFrame(tick);
