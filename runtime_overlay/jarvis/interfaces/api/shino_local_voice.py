@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import shutil
+import subprocess
+import tempfile
 import time
+import wave
+from pathlib import Path
 
 import httpx
 import numpy as np
 from fastapi import APIRouter, Request, Response
-from faster_whisper import WhisperModel
 from loguru import logger
 from pydantic import BaseModel
 
@@ -17,154 +22,174 @@ from jarvis.providers.audio.tts import tts_engine
 router = APIRouter(prefix="/api/shino/voice", tags=["shino-local-voice"])
 
 _MAX_PCM_BYTES = 12 * 1024 * 1024
+_HANDY_TIMEOUT_SECONDS = 60.0
+_DEFAULT_HANDY_MODEL = "handy-computer/whisper-large-v3-turbo-gguf"
+_DEFAULT_HANDY_DEVICE_INDEX = "0"
+
 _stt_lock = asyncio.Lock()
-_model_lock = asyncio.Lock()
 _stt_phase = "cold"
 _stt_started_at = 0.0
 _stt_last_ms: float | None = None
 _stt_last_error = ""
-_shino_model: WhisperModel | None = None
-_shino_model_name = ""
-_shino_device = "cold"
-_shino_compute = ""
-_shino_fallback_reason = ""
+_stt_last_backend = ""
+_stt_last_bound_backend = ""
+_stt_last_load_ms: float | None = None
+_stt_last_infer_ms: float | None = None
+_stt_last_rtf: float | None = None
 
 
 class TTSRequest(BaseModel):
     text: str
 
 
-def _requested_model() -> str:
-    return (os.getenv("SHINO_WHISPER_MODEL") or settings.whisper_model or "small").strip()
+def _handy_model() -> str:
+    return (os.getenv("SHINO_HANDY_MODEL") or _DEFAULT_HANDY_MODEL).strip()
 
 
-def _cpu_model() -> str:
-    # CPU is only an emergency fallback. A smaller model keeps voice interactive.
-    return (os.getenv("SHINO_WHISPER_CPU_MODEL") or "base").strip()
+def _handy_device_index() -> str:
+    return (os.getenv("SHINO_HANDY_DEVICE_INDEX") or _DEFAULT_HANDY_DEVICE_INDEX).strip()
 
 
-async def _build_model() -> WhisperModel:
-    global _shino_model, _shino_model_name, _shino_device, _shino_compute, _shino_fallback_reason
+def _find_handy_exe() -> Path | None:
+    override = (os.getenv("SHINO_HANDY_EXE") or "").strip()
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override).expanduser())
 
-    if _shino_model is not None:
-        return _shino_model
+    local_app_data = (os.getenv("LOCALAPPDATA") or "").strip()
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "Handy" / "handy.exe")
 
-    async with _model_lock:
-        if _shino_model is not None:
-            return _shino_model
+    found = shutil.which("handy") or shutil.which("handy.exe")
+    if found:
+        candidates.append(Path(found))
 
-        requested = _requested_model()
-        forced = (os.getenv("SHINO_WHISPER_DEVICE") or "cuda").strip().lower()
-
-        if forced != "cpu":
-            try:
-                logger.info("SHINO Whisper: initialisation CUDA model={} float16", requested)
-                model = await asyncio.to_thread(
-                    WhisperModel,
-                    requested,
-                    device="cuda",
-                    compute_type="float16",
-                )
-                _shino_model = model
-                _shino_model_name = requested
-                _shino_device = "cuda"
-                _shino_compute = "float16"
-                _shino_fallback_reason = ""
-                logger.info("SHINO Whisper: CUDA prêt model={}", requested)
-                return model
-            except Exception as exc:
-                _shino_fallback_reason = str(exc)[:300]
-                logger.warning("SHINO Whisper CUDA indisponible -> CPU int8: {}", _shino_fallback_reason)
-
-        cpu_name = _cpu_model()
-        logger.info("SHINO Whisper: initialisation CPU model={} int8", cpu_name)
-        model = await asyncio.to_thread(
-            WhisperModel,
-            cpu_name,
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=max(2, min(8, os.cpu_count() or 4)),
-        )
-        _shino_model = model
-        _shino_model_name = cpu_name
-        _shino_device = "cpu"
-        _shino_compute = "int8"
-        logger.info("SHINO Whisper: CPU prêt model={} int8", cpu_name)
-        return model
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return candidate.resolve()
+        except OSError:
+            continue
+    return None
 
 
-def _run_transcribe(model: WhisperModel, pcm: bytes) -> str:
+def _write_pcm16_wav(pcm: bytes, path: Path) -> float:
     audio = np.frombuffer(pcm, dtype=np.float32).copy()
-    segments, _ = model.transcribe(
-        audio,
-        language="fr",
-        beam_size=1,
-        best_of=1,
-        temperature=0.0,
-        vad_filter=True,
-        condition_on_previous_text=False,
-    )
-    return " ".join(segment.text.strip() for segment in segments).strip()
+    if audio.size == 0:
+        return 0.0
+    audio = np.nan_to_num(audio, nan=0.0, posinf=1.0, neginf=-1.0)
+    audio = np.clip(audio, -1.0, 1.0)
+    pcm16 = np.rint(audio * 32767.0).astype(np.int16)
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(16_000)
+        wav.writeframes(pcm16.tobytes())
+    return float(pcm16.size) / 16_000.0
 
 
-async def _rebuild_cpu_after_cuda_failure(reason: str) -> WhisperModel:
-    global _shino_model, _shino_model_name, _shino_device, _shino_compute, _shino_fallback_reason
-    async with _model_lock:
-        _shino_model = None
-        _shino_fallback_reason = reason[:300]
-        cpu_name = _cpu_model()
-        logger.warning("SHINO Whisper CUDA runtime failure -> CPU {} int8: {}", cpu_name, reason[:220])
-        model = await asyncio.to_thread(
-            WhisperModel,
-            cpu_name,
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=max(2, min(8, os.cpu_count() or 4)),
+async def _run_handy(pcm: bytes) -> dict[str, object]:
+    handy = _find_handy_exe()
+    if handy is None:
+        raise RuntimeError(
+            "Handy introuvable. Installe Handy ou définis SHINO_HANDY_EXE vers handy.exe."
         )
-        _shino_model = model
-        _shino_model_name = cpu_name
-        _shino_device = "cpu"
-        _shino_compute = "int8"
-        return model
 
+    model = _handy_model()
+    device_index = _handy_device_index()
+    temp_path: Path | None = None
 
-async def _local_transcribe(pcm: bytes) -> str:
-    model = await _build_model()
     try:
-        return await asyncio.to_thread(_run_transcribe, model, pcm)
-    except Exception as exc:
-        # Missing CUDA/cuDNN DLLs can surface only on the first inference rather
-        # than during model construction. Retry once on a fast CPU int8 fallback.
-        if _shino_device == "cuda":
-            cpu_model = await _rebuild_cpu_after_cuda_failure(str(exc))
-            return await asyncio.to_thread(_run_transcribe, cpu_model, pcm)
-        raise
+        with tempfile.NamedTemporaryFile(prefix="shino-voice-", suffix=".wav", delete=False) as tmp:
+            temp_path = Path(tmp.name)
+        audio_secs = await asyncio.to_thread(_write_pcm16_wav, pcm, temp_path)
+
+        args = [
+            str(handy),
+            "--transcribe-file",
+            str(temp_path),
+            "--model",
+            model,
+            "--device-index",
+            device_index,
+            "--json",
+        ]
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        logger.info(
+            "SHINO Handy STT start: model={}, device_index={}, audio={:.2f}s, exe={}",
+            model,
+            device_index,
+            audio_secs,
+            handy,
+        )
+
+        process = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            creationflags=creationflags,
+        )
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(), timeout=_HANDY_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.communicate()
+            raise RuntimeError(f"Handy timeout après {int(_HANDY_TIMEOUT_SECONDS)} s")
+
+        stdout_text = stdout.decode("utf-8", errors="replace").strip()
+        stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        if process.returncode != 0:
+            detail = stderr_text[-1200:] or stdout_text[-1200:] or "aucun détail"
+            raise RuntimeError(f"Handy exit {process.returncode}: {detail}")
+        if not stdout_text:
+            detail = stderr_text[-800:] or "stdout vide"
+            raise RuntimeError(f"Handy n'a renvoyé aucun JSON: {detail}")
+
+        try:
+            payload = json.loads(stdout_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"JSON Handy invalide: {stdout_text[-800:]}") from exc
+
+        text = str(payload.get("text") or "").strip()
+        payload["text"] = text
+        payload["audio_secs"] = float(payload.get("audio_secs") or audio_secs)
+        return payload
+    finally:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @router.get("/status")
 async def status() -> dict[str, object]:
-    remote = os.getenv("SHINO_STT_URL", "").strip()
-    loaded = _shino_model is not None
+    remote = (os.getenv("SHINO_STT_URL") or "").strip()
+    handy = _find_handy_exe()
     phase = _stt_phase
-    if not remote and phase == "cold" and loaded:
-        phase = "ready"
     elapsed_ms = None
-    if _stt_started_at and phase in {"loading", "transcribing", "lan"}:
+    if _stt_started_at and phase in {"handy", "lan"}:
         elapsed_ms = round((time.perf_counter() - _stt_started_at) * 1000, 1)
+
     return {
         "ok": True,
-        "stt": "lan" if remote else "local",
+        "stt": "lan" if remote else "handy",
         "stt_url": remote or None,
         "stt_phase": phase,
-        "whisper_loaded": loaded,
-        "whisper_model": _shino_model_name or _requested_model(),
-        "whisper_requested_model": _requested_model(),
-        "stt_device": "lan" if remote else _shino_device,
-        "stt_compute": _shino_compute or None,
-        "stt_fallback_reason": _shino_fallback_reason or None,
         "stt_elapsed_ms": elapsed_ms,
         "stt_last_ms": _stt_last_ms,
         "stt_last_error": _stt_last_error or None,
+        "stt_last_backend": _stt_last_backend or None,
+        "handy_available": handy is not None,
+        "handy_exe": str(handy) if handy else None,
+        "handy_model": _handy_model(),
+        "handy_device_index": _handy_device_index(),
+        "handy_bound_backend": _stt_last_bound_backend or None,
+        "handy_load_ms": _stt_last_load_ms,
+        "handy_transcribe_ms": _stt_last_infer_ms,
+        "handy_rtf": _stt_last_rtf,
         "tts": settings.tts_provider,
         "llm": settings.llm_provider,
     }
@@ -186,6 +211,8 @@ async def _remote_transcribe(remote: str, pcm: bytes) -> str:
 @router.post("/transcribe")
 async def transcribe(request: Request) -> dict[str, object]:
     global _stt_phase, _stt_started_at, _stt_last_ms, _stt_last_error
+    global _stt_last_backend, _stt_last_bound_backend, _stt_last_load_ms
+    global _stt_last_infer_ms, _stt_last_rtf
 
     pcm = await request.body()
     if not pcm:
@@ -196,7 +223,7 @@ async def transcribe(request: Request) -> dict[str, object]:
     async with _stt_lock:
         _stt_started_at = time.perf_counter()
         _stt_last_error = ""
-        remote = os.getenv("SHINO_STT_URL", "").strip()
+        remote = (os.getenv("SHINO_STT_URL") or "").strip()
 
         if remote:
             _stt_phase = "lan"
@@ -204,8 +231,8 @@ async def transcribe(request: Request) -> dict[str, object]:
                 logger.info("SHINO STT LAN start: {} bytes -> {}", len(pcm), remote)
                 text = await _remote_transcribe(remote, pcm)
                 _stt_last_ms = round((time.perf_counter() - _stt_started_at) * 1000, 1)
+                _stt_last_backend = "lan"
                 _stt_phase = "ready"
-                logger.info("SHINO STT LAN done: {} ms, {} chars", _stt_last_ms, len(text))
                 return {
                     "text": text,
                     "backend": "lan",
@@ -214,54 +241,55 @@ async def transcribe(request: Request) -> dict[str, object]:
                     "device": "lan",
                 }
             except Exception as exc:
-                fallback_error = str(exc)[:180]
-                _stt_last_error = fallback_error
-                logger.warning("SHINO STT LAN failed -> local fallback: {}", fallback_error)
-        else:
-            fallback_error = ""
+                logger.warning("SHINO STT LAN failed -> Handy local: {}", str(exc)[:220])
 
-        was_loaded = _shino_model is not None
-        _stt_phase = "transcribing" if was_loaded else "loading"
+        _stt_phase = "handy"
         logger.info(
-            "SHINO STT local start: requested_model={}, loaded={}, device={}, pcm_bytes={}",
-            _requested_model(),
-            was_loaded,
-            _shino_device,
+            "SHINO STT Handy local start: model={}, device_index={}, pcm_bytes={}",
+            _handy_model(),
+            _handy_device_index(),
             len(pcm),
         )
         try:
-            text = await _local_transcribe(pcm)
+            handy = await _run_handy(pcm)
             _stt_last_ms = round((time.perf_counter() - _stt_started_at) * 1000, 1)
+            _stt_last_backend = "handy"
+            _stt_last_bound_backend = str(handy.get("bound_backend") or "")
+            _stt_last_load_ms = float(handy.get("load_ms") or 0.0)
+            raw_times = handy.get("transcribe_ms") or []
+            if isinstance(raw_times, list) and raw_times:
+                _stt_last_infer_ms = float(raw_times[0])
+            else:
+                _stt_last_infer_ms = float(handy.get("best_ms") or 0.0)
+            _stt_last_rtf = float(handy.get("rtf") or 0.0)
             _stt_phase = "ready"
             logger.info(
-                "SHINO STT local done: {} ms, {} chars, model={}, device={}, compute={}",
+                "SHINO Handy STT done: total={} ms, load={} ms, infer={} ms, backend={}, rtf={:.2f}x, chars={}",
                 _stt_last_ms,
-                len(text),
-                _shino_model_name,
-                _shino_device,
-                _shino_compute,
+                _stt_last_load_ms,
+                _stt_last_infer_ms,
+                _stt_last_bound_backend or "?",
+                _stt_last_rtf,
+                len(str(handy.get("text") or "")),
             )
         except Exception as exc:
             _stt_last_ms = round((time.perf_counter() - _stt_started_at) * 1000, 1)
             _stt_phase = "error"
-            _stt_last_error = str(exc)[:240]
-            logger.exception("SHINO STT local failed after {} ms", _stt_last_ms)
+            _stt_last_error = str(exc)[:500]
+            logger.exception("SHINO Handy STT failed after {} ms", _stt_last_ms)
             raise
 
-        payload: dict[str, object] = {
-            "text": text,
-            "backend": "local",
-            "model": _shino_model_name,
-            "device": _shino_device,
-            "compute": _shino_compute,
+        return {
+            "text": str(handy.get("text") or "").strip(),
+            "backend": "handy",
+            "model": str(handy.get("model") or _handy_model()),
+            "device": str(handy.get("requested_device") or f"index {_handy_device_index()}"),
+            "bound_backend": _stt_last_bound_backend or None,
             "duration_ms": _stt_last_ms,
-            "cold_start": not was_loaded,
+            "load_ms": _stt_last_load_ms,
+            "transcribe_ms": _stt_last_infer_ms,
+            "rtf": _stt_last_rtf,
         }
-        if _shino_fallback_reason:
-            payload["device_fallback"] = _shino_fallback_reason
-        if fallback_error:
-            payload["lan_fallback"] = fallback_error
-        return payload
 
 
 @router.post("/tts")
