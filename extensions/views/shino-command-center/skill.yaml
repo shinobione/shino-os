@@ -1,14 +1,15 @@
 name: shino-command-center
 label: SHINO Command Center
-version: 0.2.4
+version: 0.2.5
 author: shinobione
-description: Home SHINO-OS ultrawide alimentée par Jarvis avec sphère native Three.js et navigation shell unique.
+description: Home SHINO-OS ultrawide alimentée par Jarvis avec sphère native Three.js, navigation shell unique et voix locale.
 tags:
   - shino
   - view
   - system
   - ultrawide
   - native-orb
+  - local-voice
 type: view
 static_files:
   - view.js
@@ -19,6 +20,7 @@ static_files:
   - zz-autostart.js
   - zzz-shell-stabilizer.css
   - zzz-shell-stabilizer.js
+  - zzzz-local-voice.js
 requires_env: []
 requires_tools: []
 capabilities:
@@ -28,4 +30,7 @@ capabilities:
   - native-orb
   - mission-control
   - voice-ui
+  - local-voice
+  - whisper-stt
+  - piper-tts
   - single-shell-navigation
