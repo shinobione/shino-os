@@ -2,7 +2,9 @@
 
 Personal AI command center built as a **local overlay on top of Jarvis OS**.
 
-SHINO-OS does **not** vendor/copy the Jarvis OS codebase. The launcher clones a pinned Jarvis OS runtime **outside the Git repository and outside OneDrive**, then exposes SHINO-specific views/skills through Jarvis' native `JARVIS_DEV_EXTENSIONS_DIR` mechanism.
+SHINO-OS does **not** vendor/copy the Jarvis OS codebase. The launcher clones a pinned Jarvis OS runtime **outside the Git repository and outside OneDrive**, then stages SHINO-specific views/runtime overlays into that local Jarvis runtime.
+
+> **Project status, runtime requirements and next steps:** see [`ROADMAP.md`](ROADMAP.md).
 
 ## Architecture
 
@@ -10,21 +12,22 @@ SHINO-OS does **not** vendor/copy the Jarvis OS codebase. The launcher clones a 
 SHINO-OS repo (may live in OneDrive/GitHub)
 ├─ shino.bat / shino.ps1        Windows launcher
 ├─ UPSTREAM.lock                reproducible Jarvis OS pin
+├─ ROADMAP.md                   canonical project state / next steps
+├─ runtime_overlay/             small SHINO runtime bridges
+├─ scripts/                     runtime sync/patch scripts
 └─ extensions/
-   ├─ views/
-   │  └─ shino-command-center/  3440×1440 Jarvis-native UI
-   ├─ skills/                   future RISO / SHINOBIWAN skills
-   └─ presets/                  future SHINO automations
+   └─ views/
+      └─ shino-command-center/  3440×1440 Jarvis-powered cockpit
 
 %LOCALAPPDATA%\SHINO-OS\runtime\
 └─ jarvis-OS\                   cloned upstream runtime + bundle + .env
 ```
 
-Jarvis OS supplies the engine: voice/LiveKit, memory kernel, mission engine, tools, proactive engine, permissions/governance, LLM providers and extension framework.
+Jarvis OS supplies the engine: FastAPI, memory kernel, missions, tools, proactive engine, permissions/governance, WebSocket, vision, TTS and extension framework.
 
-SHINO-OS supplies the personality, ultrawide interface, domain skills and local hardware integration.
+SHINO-OS supplies the ultrawide shell, identity, local voice bridge, domain skills and local/LAN hardware integration.
 
-The runtime location can be overridden with the `SHINO_RUNTIME_ROOT` environment variable, but the launcher refuses a runtime path under OneDrive because Jarvis' embedded Python/venv bundle relies on filesystem behavior OneDrive can break.
+The runtime location can be overridden with `SHINO_RUNTIME_ROOT`, but the launcher refuses a runtime path under OneDrive because Jarvis' embedded Python/venv bundle relies on filesystem behavior OneDrive can break.
 
 ## Current upstream pin
 
@@ -47,8 +50,6 @@ From the SHINO-OS repository folder:
 
 The first command reports the external Jarvis runtime path. `setup` clones Jarvis OS into `%LOCALAPPDATA%\SHINO-OS\runtime\jarvis-OS` if required and then starts the standard Jarvis setup flow.
 
-The SHINO repository itself may remain inside OneDrive. Only the Jarvis runtime/bundle is deliberately kept outside it.
-
 ## Run
 
 ```powershell
@@ -64,21 +65,39 @@ Other passthrough commands:
 .\shino.bat update
 ```
 
-## SHINO Command Center
+## Runtime requirements — current V0.2
 
-`extensions/views/shino-command-center` is a native Jarvis full-screen view using `Jarvis.views.register()`.
+- **Jarvis OS:** started by `shino.bat run`.
+- **Ollama:** must currently be running on `http://localhost:11434`.
+- **Qwen3 8B:** served by Ollama.
+- **Handy:** must be installed, but its GUI does **not** need to remain open.
+- **Whisper Large V3 Turbo:** downloaded in Handy; SHINO invokes Handy headlessly for STT.
+- **Piper:** used inside Jarvis; no separate app/process to launch.
+- **Chrome:** hosts the cockpit, microphone capture and future MediaPipe vision UI.
+
+The detailed matrix is maintained in [`ROADMAP.md`](ROADMAP.md).
+
+## SHINO Command Center
 
 Current V0.2 integration features:
 
-- 3440×1440-first cockpit
-- Canvas Living Core
-- core states: `idle`, `listening`, `thinking`, `speaking`, `working`, `error`
+- physical 3440×1440-first cockpit
+- **native Jarvis Three.js orb** reused in SHINO
+- orb states: `idle`, `listening`, `thinking`, `speaking`, `error`
 - real CPU/RAM/disk polling via Jarvis `/api/system/perf`
-- LLM backend detection via `/api/config/llm-status`
+- LLM backend status via `/api/config/llm-status`
+- real Jarvis/Qwen chat with session continuity
 - RISO / MUSIC / DEV / FILES / PC / SETTINGS context dock
-- backend tool for `show`, `hide`, `set_state`, `set_mode`, `refresh`
+- single Jarvis shell + internal iframe navigation
+- local microphone bridge
+- Handy / Whisper Large V3 Turbo STT target on RTX 3060 Vulkan
+- Piper local TTS
 
-This replaces the standalone mock dashboard direction: the UI is now designed to run **inside the real Jarvis runtime**.
+## Vision / gestures
+
+The original Jarvis MediaPipe stack remains in the upstream runtime. It includes face detection, hand landmarks, discrete gestures, pinch volume, pan/zoom gestures and a separate YOLO object-detection daemon.
+
+The current SHINO cockpit hides the original Jarvis camera control; restoring the camera/gesture UI inside SHINO is a high-priority roadmap item.
 
 ## Planned SHINO extensions
 
@@ -87,10 +106,10 @@ This replaces the standalone mock dashboard direction: the UI is now designed to
 - GitHub/dev workflows
 - RTX 3070 Ti LAN worker integration
 - SHINO-specific presets and proactive routines
-- voice-driven state synchronization for the Living Core
+- vision/gesture integration in the SHINO shell
 
 ## Licensing
 
-Jarvis OS is a separate upstream project licensed under **AGPL-3.0-or-later**. SHINO-OS currently references and locally clones it rather than vendoring its source. See [`NOTICE.md`](NOTICE.md).
+Jarvis OS is a separate upstream project licensed under **AGPL-3.0-or-later**. SHINO-OS references and locally clones it rather than vendoring its source. See [`NOTICE.md`](NOTICE.md).
 
 Jarvis Skills is a separate upstream catalogue licensed under MIT.
