@@ -14,9 +14,13 @@ jobs:
       - name: Validate SHINO overlay
         run: python scripts/validate_overlay.py
       - name: Check command-center JavaScript syntax
-        run: node --check extensions/views/shino-command-center/view.js
-      - name: Compile Python view tool
-        run: python -m py_compile extensions/views/shino-command-center/tool.py
+        run: |
+          find extensions/views/shino-command-center -maxdepth 1 -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: Compile Python view package
+        run: |
+          python -m py_compile \
+            extensions/views/shino-command-center/tool.py \
+            extensions/views/shino-command-center/skill.py
 
   windows-launcher:
     runs-on: windows-latest
