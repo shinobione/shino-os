@@ -59,6 +59,31 @@ function Ensure-Upstream {
   }
 }
 
+function Ensure-SetupBundle {
+  $manifest = Join-Path $JarvisDir 'bundle\manifest.json'
+  $bundlePython = Join-Path $JarvisDir 'bundle\.venv\Scripts\python.exe'
+  $devPython = Join-Path $JarvisDir '.venv\Scripts\python.exe'
+
+  # Existing final-user bundle or deliberate dev venv: nothing to do.
+  if ((Test-Path $manifest) -and (Test-Path $bundlePython)) { return }
+  if (Test-Path $devPython) { return }
+
+  $downloader = Join-Path $JarvisDir 'scripts\download_bundle.ps1'
+  if (-not (Test-Path $downloader)) {
+    Write-Shino 'Downloader du bundle upstream introuvable; Jarvis gérera son setup normalement.'
+    return
+  }
+
+  Write-Shino 'Installation du bundle Windows officiel Jarvis (~658 MB)...'
+  . $downloader
+  Install-JarvisBundle -ProjectRoot $JarvisDir
+
+  if (-not ((Test-Path $manifest) -and (Test-Path $bundlePython))) {
+    throw 'Le bundle Jarvis ne semble pas utilisable après téléchargement.'
+  }
+  Write-Shino 'Bundle Jarvis prêt.'
+}
+
 function Set-ShinoEnvironment {
   # Jarvis natively scans this root for skills/, presets/ and views/.
   # These lightweight extension sources can remain in the SHINO-OS Git repo.
@@ -70,6 +95,10 @@ function Set-ShinoEnvironment {
 function Invoke-Jarvis([string]$JarvisCommand) {
   Ensure-Upstream
   Set-ShinoEnvironment
+
+  if ($JarvisCommand -eq 'setup') {
+    Ensure-SetupBundle
+  }
 
   $launcher = Join-Path $JarvisDir 'jarvis.bat'
   if (-not (Test-Path $launcher)) { throw "Lanceur Jarvis introuvable: $launcher" }
@@ -99,7 +128,7 @@ function Show-Status {
     if (-not $branch) { $branch = '(detached)' }
     Write-Shino "Runtime Jarvis: $sha $branch"
     Write-Shino "Au pin: $($sha -eq $lock.ref)"
-    Write-Shino "Bundle présent: $(Test-Path (Join-Path $JarvisDir 'bundle'))"
+    Write-Shino "Bundle présent: $(Test-Path (Join-Path $JarvisDir 'bundle\manifest.json'))"
     Write-Shino ".env présent: $(Test-Path (Join-Path $JarvisDir '.env'))"
   } else {
     Write-Shino 'Runtime Jarvis: non installé.'
