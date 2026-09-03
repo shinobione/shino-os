@@ -171,7 +171,10 @@ function Show-Status {
 
   if (Test-Path (Join-Path $JarvisDir '.git')) {
     $sha = (git -C $JarvisDir rev-parse HEAD).Trim()
-    $branch = (git -C $JarvisDir branch --show-current).Trim()
+    # `git branch --show-current` intentionally prints nothing on a detached HEAD.
+    # Coerce that empty output to a string before Trim so StrictMode never sees $null.
+    $branch = [string](git -C $JarvisDir branch --show-current)
+    $branch = $branch.Trim()
     if (-not $branch) { $branch = '(detached)' }
     Write-Shino "Runtime Jarvis: $sha $branch"
     Write-Shino "Au pin: $($sha -eq $lock.ref)"
