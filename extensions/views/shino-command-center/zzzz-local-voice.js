@@ -7,6 +7,14 @@
   const SILENCE_MS = 1050;
   const MAX_RECORD_MS = 20000;
   const RMS_GATE = 0.014;
+  const STT_TIMEOUT_MS = 300000;
+  const ORB_STATE = {
+    idle: 'idle',
+    listening: 'listening',
+    thinking: 'thinking',
+    speaking: 'speaking',
+    error: 'offline',
+  };
 
   let captureActive = false;
   let processing = false;
@@ -21,14 +29,37 @@
   let startedAt = 0;
   let lastVoiceAt = 0;
   let speechDetected = false;
+  let authoritativeCore = 'idle';
+  let orbHeartbeat = null;
 
   function root() { return document.getElementById(ROOT_ID); }
   function q(sel) { return root()?.querySelector(sel) || null; }
   function authHeaders(extra = {}) {
     return { ...(window.Jarvis?.authHeaders ? window.Jarvis.authHeaders() : {}), ...extra };
   }
+  function applyNativeOrb(state) {
+    const nativeState = ORB_STATE[state] || 'idle';
+    try { window.__jarvisSetOrbState?.(nativeState); } catch (_) {}
+  }
+  function syncOrbHeartbeat() {
+    if (authoritativeCore === 'idle') {
+      if (orbHeartbeat) window.clearInterval(orbHeartbeat);
+      orbHeartbeat = null;
+      return;
+    }
+    if (!orbHeartbeat) {
+      orbHeartbeat = window.setInterval(() => {
+        if (captureActive || processing || authoritativeCore === 'error') {
+          applyNativeOrb(authoritativeCore);
+        }
+      }, 180);
+    }
+  }
   function setCore(state) {
-    try { window.Jarvis?.views?.dispatch(VIEW_ID, 'set_state', { state }); } catch (_) {}
+    authoritativeCore = state || 'idle';
+    try { window.Jarvis?.views?.dispatch(VIEW_ID, 'set_state', { state: authoritativeCore }); } catch (_) {}
+    applyNativeOrb(authoritativeCore);
+    syncOrbHeartbeat();
   }
   function setUi(label, sys, active) {
     const labelEl = q('#sho-voice-label');
@@ -74,6 +105,15 @@
     }
     if (playbackCtx.state === 'suspended') await playbackCtx.resume();
     return playbackCtx;
+  }
+
+  async function fetchStatus() {
+    const response = await fetch('/api/shino/voice/status', {
+      cache: 'no-store',
+      headers: authHeaders(),
+    });
+    if (!response.ok) throw new Error(`status HTTP ${response.status}`);
+    return response.json();
   }
 
   async function start() {
@@ -155,13 +195,49 @@
   }
 
   async function transcribe(pcm) {
-    const response = await fetch('/api/shino/voice/transcribe', {
-      method: 'POST',
-      headers: authHeaders({ 'Content-Type': 'application/octet-stream' }),
-      body: pcm.buffer,
-    });
-    if (!response.ok) throw new Error(`STT HTTP ${response.status}`);
-    return response.json();
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), STT_TIMEOUT_MS);
+    const started = performance.now();
+    let pollBusy = false;
+    const poll = window.setInterval(async () => {
+      if (pollBusy) return;
+      pollBusy = true;
+      try {
+        const status = await fetchStatus();
+        const elapsed = Math.max(1, Math.round((performance.now() - started) / 1000));
+        const model = String(status.whisper_model || 'whisper').toUpperCase();
+        if (status.stt_phase === 'loading' || status.whisper_loaded === false) {
+          setUi(`WHISPER LOADING ${elapsed}s`, `${model} COLD START`, true);
+        } else if (status.stt_phase === 'lan') {
+          setUi(`TRANSCRIBING ${elapsed}s`, 'WHISPER LAN', true);
+        } else {
+          setUi(`TRANSCRIBING ${elapsed}s`, `${model} LOCAL`, true);
+        }
+        setCore('thinking');
+      } catch (_) {
+        // The transcription request remains authoritative; status polling is diagnostic only.
+      } finally {
+        pollBusy = false;
+      }
+    }, 850);
+
+    try {
+      const bytes = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
+      const response = await fetch('/api/shino/voice/transcribe', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/octet-stream' }),
+        body: bytes,
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`STT HTTP ${response.status}`);
+      return response.json();
+    } catch (err) {
+      if (err?.name === 'AbortError') throw new Error('Whisper timeout après 5 min');
+      throw err;
+    } finally {
+      window.clearInterval(poll);
+      window.clearTimeout(timeout);
+    }
   }
 
   async function synthesize(text) {
@@ -204,7 +280,10 @@
         return;
       }
 
-      setUi('TRANSCRIBING…', 'WHISPER', true);
+      let preflight = null;
+      try { preflight = await fetchStatus(); } catch (_) {}
+      const cold = preflight && preflight.stt === 'local' && preflight.whisper_loaded === false;
+      setUi(cold ? 'WHISPER LOADING…' : 'TRANSCRIBING…', cold ? 'COLD START' : 'WHISPER', true);
       setCore('thinking');
       const pcm = resample(recorded, recordedRate, TARGET_RATE);
       const stt = await transcribe(pcm);
@@ -216,7 +295,11 @@
         return;
       }
 
-      setUi('THINKING…', stt.backend === 'lan' ? 'WHISPER LAN' : 'WHISPER LOCAL', true);
+      const sttMs = Number(stt.duration_ms || 0);
+      const sttInfo = stt.backend === 'lan'
+        ? 'WHISPER LAN'
+        : sttMs > 0 ? `WHISPER ${Math.round(sttMs)}ms` : 'WHISPER LOCAL';
+      setUi('THINKING…', sttInfo, true);
       setCore('thinking');
       if (!window.SHINOChat?.sendText) throw new Error('chat bridge unavailable');
       const answer = await window.SHINOChat.sendText(text, { deferIdle: true, noFocus: true });
@@ -251,10 +334,10 @@
 
   async function refreshStatus() {
     try {
-      const response = await fetch('/api/shino/voice/status', { headers: authHeaders() });
-      if (!response.ok) return;
-      const status = await response.json();
-      const mode = status.stt === 'lan' ? 'LAN READY' : 'LOCAL READY';
+      const status = await fetchStatus();
+      const mode = status.stt === 'lan'
+        ? 'LAN READY'
+        : status.whisper_loaded ? 'LOCAL READY' : 'LOCAL COLD';
       setUi('VOICE READY', mode, false);
     } catch (_) {}
   }
