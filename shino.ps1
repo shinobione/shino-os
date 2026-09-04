@@ -19,6 +19,7 @@ if ($env:SHINO_RUNTIME_ROOT) {
 $JarvisDir = Join-Path $RuntimeRoot "jarvis-OS"
 $LockPath = Join-Path $Root "UPSTREAM.lock"
 $ExtensionsRoot = Join-Path $Root "extensions"
+$DefaultShinoPort = 18777
 
 function Write-Shino([string]$Message) {
   Write-Host "[SHINO-OS] $Message" -ForegroundColor Cyan
@@ -92,7 +93,7 @@ function Set-ShinoEnvironment {
 }
 
 function Get-JarvisPort {
-  $port = 8000
+  $port = $DefaultShinoPort
   $envPath = Join-Path $JarvisDir ".env"
 
   if (Test-Path $envPath) {
@@ -132,7 +133,7 @@ function Set-JarvisPort {
 }
 
 function Get-ShinoStableJarvisPort {
-  $port = 8000
+  $port = $DefaultShinoPort
   if ($env:SHINO_JARVIS_PORT) {
     $parsed = 0
     if (-not [int]::TryParse($env:SHINO_JARVIS_PORT, [ref]$parsed)) {
@@ -147,17 +148,15 @@ function Get-ShinoStableJarvisPort {
 }
 
 function Ensure-StableJarvisPort {
-  # IMPORTANT: ne pas sonder puis incrementer le port ici.
-  # Jarvis nettoie lui-meme ses anciens process/listeners au demarrage.
-  # L'ancien comportement SHINO incrementait le PORT avant ce nettoyage,
-  # laissait les instances precedentes vivantes et cassait les redirect URI OAuth.
+  # SHINO uses one dedicated high port instead of fighting generic localhost:8000.
+  # The port stays fixed across runs so OAuth redirect URIs remain stable.
   $stablePort = Get-ShinoStableJarvisPort
   $configuredPort = Get-JarvisPort
   if ($configuredPort -ne $stablePort) {
     Set-JarvisPort -Port $stablePort
-    Write-Shino "Port Jarvis repinne: $configuredPort -> $stablePort (URL/OAuth stable)."
+    Write-Shino "Port Jarvis repinne: $configuredPort -> $stablePort (dedie SHINO/OAuth)."
   } else {
-    Write-Shino "Port Jarvis fixe: $stablePort (URL/OAuth stable)."
+    Write-Shino "Port Jarvis fixe: $stablePort (dedie SHINO/OAuth)."
   }
   return $stablePort
 }
