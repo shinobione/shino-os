@@ -30,6 +30,7 @@
   let speechDetected = false;
   let authoritativeCore = 'idle';
   let orbHeartbeat = null;
+  let residentHandyActive = false;
 
   function root() { return document.getElementById(ROOT_ID); }
   function q(sel) { return root()?.querySelector(sel) || null; }
@@ -117,6 +118,67 @@
     return response.json();
   }
 
+  async function postResident(path) {
+    const response = await fetch(`/api/shino/voice/handy-resident/${path}`, {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+    if (!response.ok) throw new Error(`Handy resident HTTP ${response.status}`);
+    return response.json();
+  }
+
+  function focusHandyPasteSink() {
+    let sink = document.getElementById('shino-handy-paste-sink');
+    if (!sink) {
+      sink = document.createElement('textarea');
+      sink.id = 'shino-handy-paste-sink';
+      sink.setAttribute('aria-hidden', 'true');
+      sink.tabIndex = -1;
+      Object.assign(sink.style, {
+        position: 'fixed',
+        left: '-10000px',
+        top: '-10000px',
+        width: '1px',
+        height: '1px',
+        opacity: '0',
+        pointerEvents: 'none',
+      });
+      document.body.appendChild(sink);
+    }
+    sink.value = '';
+    try { sink.focus({ preventScroll: true }); } catch (_) { try { sink.focus(); } catch (_) {} }
+    return sink;
+  }
+
+  async function startResidentHandy() {
+    try {
+      const result = await postResident('start');
+      if (result?.ok) {
+        residentHandyActive = true;
+        console.info(`[SHINO-OS] Handy resident armed · ${result.model || 'Whisper'}`);
+        return true;
+      }
+      console.info(`[SHINO-OS] Handy resident unavailable -> one-shot fallback: ${result?.reason || 'unknown'}`);
+    } catch (err) {
+      console.info(`[SHINO-OS] Handy resident start failed -> one-shot fallback: ${err?.message || err}`);
+    }
+    residentHandyActive = false;
+    return false;
+  }
+
+  async function stopResidentHandy() {
+    if (!residentHandyActive) return null;
+    const sink = focusHandyPasteSink();
+    try {
+      const result = await postResident('stop');
+      await new Promise((resolve) => window.setTimeout(resolve, 180));
+      return result;
+    } finally {
+      residentHandyActive = false;
+      try { sink.blur(); } catch (_) {}
+    }
+  }
+
   async function start() {
     if (captureActive || processing) return;
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -125,6 +187,7 @@
     }
     try {
       await ensurePlaybackContext();
+      const resident = await startResidentHandy();
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
@@ -159,9 +222,12 @@
       source.connect(processor);
       processor.connect(silentGain);
       silentGain.connect(captureCtx.destination);
-      setUi('LISTENING…', 'LOCAL MIC', true);
+      setUi('LISTENING…', resident ? 'HANDY RESIDENT' : 'LOCAL MIC', true);
       setCore('listening');
     } catch (err) {
+      if (residentHandyActive) {
+        try { await stopResidentHandy(); } catch (_) {}
+      }
       captureActive = false;
       setUi('VOICE OFF', 'MIC ERROR', false);
       setCore('error');
@@ -393,6 +459,9 @@
 
     try {
       if (recorded.length < recordedRate * 0.2) {
+        if (residentHandyActive) {
+          try { await stopResidentHandy(); } catch (_) {}
+        }
         setUi('VOICE READY', 'HANDY READY', false);
         setCore('idle');
         return;
@@ -403,10 +472,32 @@
       if (preflight && preflight.stt !== 'lan' && preflight.handy_available === false) {
         throw new Error('Handy introuvable sur ce PC');
       }
-      setUi('HANDY…', preflight?.stt === 'lan' ? 'WHISPER LAN' : 'TURBO · RTX 3060', true);
-      setCore('thinking');
+
       const pcm = resample(recorded, recordedRate, TARGET_RATE);
-      const stt = await transcribe(pcm);
+      let stt = null;
+
+      if (residentHandyActive) {
+        setUi('HANDY RESIDENT…', 'WHISPER · WARM', true);
+        setCore('thinking');
+        try {
+          const resident = await stopResidentHandy();
+          if (resident?.ok && String(resident.text || '').trim()) {
+            stt = resident;
+            console.info(`[SHINO-OS] Handy resident STT ${Math.round(Number(resident.duration_ms || 0))}ms`);
+          } else {
+            console.warn(`[SHINO-OS] Handy resident yielded no usable text -> one-shot fallback: ${resident?.reason || 'empty'}`);
+          }
+        } catch (err) {
+          console.warn(`[SHINO-OS] Handy resident stop failed -> one-shot fallback: ${err?.message || err}`);
+        }
+      }
+
+      if (!stt) {
+        setUi('HANDY…', preflight?.stt === 'lan' ? 'WHISPER LAN' : 'TURBO · RTX 3060', true);
+        setCore('thinking');
+        stt = await transcribe(pcm);
+      }
+
       const text = String(stt.text || '').trim();
       if (!text) {
         setUi('VOICE READY', 'HANDY READY', false);
@@ -420,7 +511,9 @@
       const backend = String(stt.bound_backend || stt.device || '').toUpperCase();
       const sttInfo = stt.backend === 'lan'
         ? 'WHISPER LAN'
-        : `HANDY ${backend || 'VULKAN'} · ${Math.round(inferMs || Number(stt.duration_ms || 0))}ms`;
+        : stt.backend === 'handy-resident'
+          ? `HANDY RESIDENT · ${Math.round(Number(stt.duration_ms || 0))}ms`
+          : `HANDY ${backend || 'VULKAN'} · ${Math.round(inferMs || Number(stt.duration_ms || 0))}ms`;
       setUi('THINKING…', sttInfo, true);
       setCore('thinking');
       if (loadMs > 0) console.info(`[SHINO-OS] Handy load ${Math.round(loadMs)}ms, infer ${Math.round(inferMs)}ms`);
@@ -436,7 +529,8 @@
 
       const spoken = await speech.finish();
       const finalTts = ttsLabel(spoken.engine);
-      setUi('VOICE READY', `${stt.backend === 'lan' ? 'LAN' : 'HANDY'} + ${finalTts}`, false);
+      const sttLabel = stt.backend === 'lan' ? 'LAN' : stt.backend === 'handy-resident' ? 'HANDY R' : 'HANDY';
+      setUi('VOICE READY', `${sttLabel} + ${finalTts}`, false);
       setCore('idle');
     } catch (err) {
       console.error('[SHINO-OS] Local voice turn failed:', err);
@@ -447,6 +541,7 @@
     } finally {
       processing = false;
       chunks = [];
+      residentHandyActive = false;
     }
   }
 
@@ -461,8 +556,10 @@
       const status = await fetchStatus();
       const tts = status.tts_url ? 'CHATTERBOX' : 'PIPER';
       if (status.stt === 'lan') setUi('VOICE READY', `LAN · ${tts}`, false);
-      else if (status.handy_available) setUi('VOICE READY', `HANDY · ${tts}`, false);
-      else setUi('VOICE OFF', 'HANDY MISSING', false);
+      else if (status.handy_available) {
+        const handyMode = status.handy_resident_compatible ? 'HANDY R' : 'HANDY';
+        setUi('VOICE READY', `${handyMode} · ${tts}`, false);
+      } else setUi('VOICE OFF', 'HANDY MISSING', false);
     } catch (_) {}
   }
 
