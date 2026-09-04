@@ -65,7 +65,9 @@ Règles strictes pour ce mode :
 - Ignore le `[voix]` a la fin du message utilisateur : c'est un marqueur technique, pas du contenu.
 
 '@
-  $voicePattern = '(?ms)^## Tag \[voix\]\r?\n.*?(?=^## Règles\s*$)'
+  # Match the [voix] H2 until the next H2, regardless of the next section's name.
+  # This survives upstream prompt renames/reordering (e.g. "## Regles", "## Memoire", etc.).
+  $voicePattern = '(?ms)^##\s+Tag\s+\[voix\]\s*\r?\n.*?(?=^##\s+(?!Tag\s+\[voix\])|\z)'
   if ([regex]::IsMatch($prompt, $voicePattern)) {
     $prompt = [regex]::Replace($prompt, $voicePattern, $voiceSection)
     Set-Content -Path $SystemPromptPath -Value $prompt -Encoding UTF8
