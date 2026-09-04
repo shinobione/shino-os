@@ -12,7 +12,7 @@ import torch
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="SHINO Chatterbox TTS Worker", version="0.2.0")
+app = FastAPI(title="SHINO Chatterbox TTS Worker", version="0.3.0")
 
 _model = None
 _model_lock = threading.Lock()
@@ -49,8 +49,25 @@ def _select_device() -> str:
     return requested
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name) or str(default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _resolve_reference(body: SynthesisRequest) -> str | None:
     candidate = (body.audio_prompt_path or os.getenv("SHINO_CHATTERBOX_REFERENCE") or "").strip()
+    if not candidate:
+        return None
+    path = Path(candidate).expanduser().resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Reference voix introuvable: {path}")
+    return str(path)
+
+
+def _env_reference() -> str | None:
+    candidate = (os.getenv("SHINO_CHATTERBOX_REFERENCE") or "").strip()
     if not candidate:
         return None
     path = Path(candidate).expanduser().resolve()
@@ -199,6 +216,7 @@ def health() -> dict[str, object]:
         "last_reference": _last_reference or None,
         "reference_duration_s": round(_last_reference_duration, 2) if _last_reference_duration else None,
         "conditioning_ms": _conditioning_ms or None,
+        "ready": bool(loaded and (not (os.getenv("SHINO_CHATTERBOX_REFERENCE") or "").strip() or _conditioned_reference)),
     }
     result.update(_cuda_stats())
     return result
@@ -208,7 +226,15 @@ def health() -> dict[str, object]:
 def warmup() -> dict[str, object]:
     started = time.perf_counter()
     try:
-        model = _ensure_model()
+        with _synth_lock:
+            model = _ensure_model()
+            reference = _env_reference()
+            if reference:
+                _prepare_reference_once(
+                    model,
+                    reference,
+                    _env_float("SHINO_CHATTERBOX_EXAGGERATION", 0.65),
+                )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=_error_detail(exc)) from exc
     result = {
@@ -217,6 +243,9 @@ def warmup() -> dict[str, object]:
         "device": _device,
         "sample_rate": int(model.sr),
         "load_ms": round((time.perf_counter() - started) * 1000, 1),
+        "conditioned_reference": _conditioned_reference or None,
+        "conditioning_ms": _conditioning_ms or None,
+        "ready": True,
     }
     result.update(_cuda_stats())
     return result
@@ -238,11 +267,6 @@ def synthesize(body: SynthesisRequest) -> Response:
             reference = _resolve_reference(body)
             _last_reference = reference or ""
             _last_reference_duration = _reference_duration(reference)
-
-            # Chatterbox recomputes voice conditioning every time audio_prompt_path is
-            # passed to generate(). SHINO streams sentence by sentence, so that would
-            # unnecessarily re-encode the same reference for every sentence. Cache the
-            # conditionals once per reference file/mtime and then generate from them.
             _prepare_reference_once(model, reference, body.exaggeration)
 
             kwargs = {
