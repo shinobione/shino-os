@@ -12,6 +12,8 @@ $RuntimeRoot = if ($env:SHINO_RUNTIME_ROOT) {
 $WorkerRuntime = Join-Path $RuntimeRoot "workers\chatterbox"
 $Venv = Join-Path $WorkerRuntime ".venv"
 $Python = Join-Path $Venv "Scripts\python.exe"
+$ChatterboxCommit = "5de7a54aa4e5e2baadb0182dde554908b48b85c2"
+$ChatterboxSource = "git+https://github.com/resemble-ai/chatterbox.git@$ChatterboxCommit"
 
 New-Item -ItemType Directory -Force -Path $WorkerRuntime | Out-Null
 
@@ -48,11 +50,25 @@ if (-not (Test-Path $Python)) {
   if ($LASTEXITCODE -ne 0) { throw "Echec creation venv Chatterbox." }
 }
 
-Write-Host "[SHINO-OS] Installation Chatterbox Multilingual V3 + worker..." -ForegroundColor Cyan
+Write-Host "[SHINO-OS] Installation worker + Chatterbox Multilingual V3 officiel..." -ForegroundColor Cyan
 & $Python -m pip install --upgrade pip
 if ($LASTEXITCODE -ne 0) { throw "Echec mise a jour pip." }
+
+# Worker dependencies are kept separate from Chatterbox itself. PyPI 0.1.7 does
+# not expose the V3 t3_model argument yet, while the pinned official source does.
 & $Python -m pip install -r (Join-Path $WorkerRoot "requirements.txt")
-if ($LASTEXITCODE -ne 0) { throw "Echec installation dependances Chatterbox." }
+if ($LASTEXITCODE -ne 0) { throw "Echec installation dependances worker Chatterbox." }
+
+Write-Host "[SHINO-OS] Chatterbox source officiel: $ChatterboxCommit" -ForegroundColor Cyan
+& $Python -m pip uninstall -y chatterbox-tts | Out-Null
+& $Python -m pip install $ChatterboxSource
+if ($LASTEXITCODE -ne 0) { throw "Echec installation Chatterbox depuis le repo officiel." }
+
+# Refuse silently-old builds: SHINO requires the V3 loader explicitly.
+& $Python -c "import inspect; from chatterbox.mtl_tts import ChatterboxMultilingualTTS as C; p=inspect.signature(C.from_pretrained).parameters; assert 't3_model' in p, 't3_model absent'; print('Chatterbox V3 API OK')"
+if ($LASTEXITCODE -ne 0) {
+  throw "La build Chatterbox installee ne supporte pas Multilingual V3 (t3_model absent)."
+}
 
 function Get-TorchCudaState {
   $value = [string](& $Python -c "import torch; print('true' if torch.cuda.is_available() else 'false')")
