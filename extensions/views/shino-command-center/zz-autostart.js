@@ -4,16 +4,32 @@
   const VIEW_ID = 'shino-command-center';
   const MAX_ATTEMPTS = 100;
   const VISION_LOADER_ID = 'shino-vision-loader';
+  const GESTURE_LOADER_ID = 'shino-gesture-loader';
   let attempts = 0;
 
-  function ensureVisionBridge() {
-    if (window.__SHINO_VISION_BRIDGE__ || document.getElementById(VISION_LOADER_ID)) return;
+  function ensureScript(id, src, readyFlag, label) {
+    if (window[readyFlag] || document.getElementById(id)) return;
     const script = document.createElement('script');
-    script.id = VISION_LOADER_ID;
-    script.src = `/static/skills/${VIEW_ID}/zzzzzz-vision.js`;
+    script.id = id;
+    script.src = src;
     script.defer = true;
-    script.addEventListener('error', () => console.error('[SHINO-OS] Vision bridge failed to load.'));
+    script.addEventListener('error', () => console.error(`[SHINO-OS] ${label} failed to load.`));
     document.head.appendChild(script);
+  }
+
+  function ensureShinoBridges() {
+    ensureScript(
+      VISION_LOADER_ID,
+      `/static/skills/${VIEW_ID}/zzzzzz-vision.js`,
+      '__SHINO_VISION_BRIDGE__',
+      'Vision bridge'
+    );
+    ensureScript(
+      GESTURE_LOADER_ID,
+      `/static/skills/${VIEW_ID}/zzzzzzz-gestures.js`,
+      '__SHINO_GESTURE_BRIDGE__',
+      'Gesture bridge'
+    );
   }
 
   function mountHome() {
@@ -42,7 +58,7 @@
 
   function start() {
     if (location.pathname !== '/' && !location.pathname.endsWith('/home.html')) return;
-    ensureVisionBridge();
+    ensureShinoBridges();
     window.setTimeout(mountHome, 0);
   }
 
