@@ -29,24 +29,32 @@ $CanonicalOrigin = "http://localhost:$Port"
 
 if (-not (Test-Path $GoogleOAuthPath)) { exit 0 }
 
-function Replace-RegexOnce {
+function Replace-TrimmedLineOnce {
   param(
-    [string]$Text,
-    [string]$Pattern,
-    [string]$Replacement,
+    [string[]]$Lines,
+    [string]$Needle,
+    [string[]]$Replacement,
     [string]$Label
   )
-  $rx = [regex]::new($Pattern, [System.Text.RegularExpressions.RegexOptions]::Multiline)
-  $matches = $rx.Matches($Text)
-  if ($matches.Count -ne 1) {
-    throw "${Label}: attendu 1 bloc upstream, trouve $($matches.Count). Patch refuse pour ne pas corrompre Jarvis."
+
+  $hits = @()
+  for ($i = 0; $i -lt $Lines.Count; $i++) {
+    if ($Lines[$i].Trim() -eq $Needle) { $hits += $i }
   }
-  return $rx.Replace($Text, $Replacement, 1)
+  if ($hits.Count -ne 1) {
+    throw "${Label}: attendu 1 ligne upstream, trouve $($hits.Count). Patch refuse pour ne pas corrompre Jarvis."
+  }
+
+  $index = [int]$hits[0]
+  $result = @()
+  if ($index -gt 0) { $result += $Lines[0..($index - 1)] }
+  if ($Replacement) { $result += $Replacement }
+  if ($index + 1 -lt $Lines.Count) { $result += $Lines[($index + 1)..($Lines.Count - 1)] }
+  return @($result)
 }
 
-# These are upstream runtime files, not SHINO source files. Previous iterations
-# patched them in-place and accumulated edits across runs. Always reset this tiny
-# surface from the pinned Jarvis HEAD, then apply one deterministic patch.
+# Runtime files are restored from the pinned Jarvis HEAD on every launch. This
+# repairs the Capabilities page even if an older SHINO patch corrupted it.
 if (Test-Path (Join-Path $JarvisDir ".git")) {
   foreach ($rel in @($GoogleOAuthRel, $CapabilitiesRel, $CapabilitiesHtmlRel)) {
     & git -C $JarvisDir checkout -- $rel 2>$null
@@ -58,7 +66,7 @@ if (Test-Path (Join-Path $JarvisDir ".git")) {
 }
 
 # -----------------------------------------------------------------------------
-# 1) Backend: one canonical callback + reject masked/corrupted credentials.
+# Backend: stable callback + refuse masked/corrupted credentials.
 # -----------------------------------------------------------------------------
 $oauth = Get-Content $GoogleOAuthPath -Raw -Encoding UTF8
 
@@ -118,82 +126,61 @@ $oauth = $oauth.Replace($oldServiceGuard, $newServiceGuard)
 Set-Content -Path $GoogleOAuthPath -Value $oauth -Encoding UTF8
 
 # -----------------------------------------------------------------------------
-# 2) Capabilities: tiny, count-checked edits only.
+# Capabilities: edit known lines only, never a broad JS regex.
 # -----------------------------------------------------------------------------
-$ui = Get-Content $CapabilitiesPath -Raw -Encoding UTF8
-$ui = $ui.Replace(
+$uiLines = @(Get-Content $CapabilitiesPath -Encoding UTF8)
+
+# Never put masked API values back into editable inputs. This caused invalid_client.
+$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'const v = (ss.api_keys || {})[f.key] || "";' -Replacement @(
+  '            const configured = Boolean((ss.api_keys || {})[f.key]);',
+  '            if (configured) {',
+  '              inp.dataset.configured = "1";',
+  '              inp.placeholder = f.secret',
+  '                ? "Déjà configuré — saisir une nouvelle valeur pour remplacer"',
+  '                : "Déjà configuré — laisser vide pour conserver";',
+  '            }'
+) -Label "Credentials masques"
+$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'if (v) inp.value = v;' -Replacement @() -Label "Ancien pre-remplissage masque"
+
+# OAuth must leave Jarvis' iframe but must stay in the SAME browser tab.
+$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'window.location.href = cfg.url;' -Replacement @(
+  '      const target = window.top || window;',
+  '      target.location.href = cfg.url;'
+) -Label "Navigation OAuth simple"
+
+$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });' -Replacement @(
+  '        connectBtn.addEventListener("click", () => {',
+  '          if (connectBtn.disabled) return;',
+  '          connectBtn.disabled = true;',
+  '          connectBtn.textContent = "Connexion…";',
+  '          const target = window.top || window;',
+  '          target.location.href = cfg.url;',
+  '        });'
+) -Label "Handler OAuth hybride"
+
+$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'J.mountAtmosphere();' -Replacement @(
+  '  J.mountAtmosphere();',
+  '',
+  '  const shinoParams = new URLSearchParams(window.location.search);',
+  '  if (shinoParams.get("google_error") === "invalid_client_config") {',
+  '    window.setTimeout(() => J.notify({',
+  '      kind: "error",',
+  '      text: "Google OAuth : les identifiants enregistrés sont invalides. Recopie une fois le vrai Client ID et le vrai Client Secret, puis Sauvegarder.",',
+  '    }), 150);',
+  '  }'
+) -Label "INIT Capabilities"
+
+$uiText = ($uiLines -join [Environment]::NewLine)
+$uiText = $uiText.Replace(
   'http://127.0.0.1:8000/api/google/callback/gmail + .../calendar',
   ($CanonicalOrigin + '/api/google/callback/gmail + .../calendar')
 )
+Set-Content -Path $CapabilitiesPath -Value $uiText -Encoding UTF8
 
-# Root cause of invalid_client: the upstream endpoint returns API values masked,
-# but Capabilities put those masks back into editable inputs. A later Save wrote
-# the mask to .env. Keep the fields empty and only indicate that a value exists.
-$maskedPattern = '(?m)^[ \t]*const v = \(ss\.api_keys \|\| \{\}\)\[f\.key\] \|\| "";\r?\n[ \t]*if \(v\) inp\.value = v;[ \t]*$'
-$maskedReplacement = @'
-            const configured = Boolean((ss.api_keys || {})[f.key]);
-            if (configured) {
-              inp.dataset.configured = "1";
-              inp.placeholder = f.secret
-                ? "Déjà configuré — saisir une nouvelle valeur pour remplacer"
-                : "Déjà configuré — laisser vide pour conserver";
-            }
-'@.TrimEnd()
-$ui = Replace-RegexOnce -Text $ui -Pattern $maskedPattern -Replacement $maskedReplacement -Label "Credentials masques"
-
-$oldPlainOAuth = @'
-    if (cfg.kind === "oauth") {
-      window.location.href = cfg.url;
-      return;
-    }
-'@
-$newPlainOAuth = @'
-    if (cfg.kind === "oauth") {
-      const target = window.top || window;
-      target.location.href = cfg.url;
-      return;
-    }
-'@
-if (-not $ui.Contains($oldPlainOAuth)) {
-  throw "Bloc OAuth simple upstream inattendu; patch SHINO refuse."
-}
-$ui = $ui.Replace($oldPlainOAuth, $newPlainOAuth)
-
-# Gmail/Calendar/other hybrid OAuth: same browser tab, never iframe and never popup.
-$connectPattern = '(?m)^[ \t]*connectBtn\.addEventListener\("click", \(\) => \{ window\.location\.href = cfg\.url; \}\);[ \t]*$'
-$connectReplacement = @'
-        connectBtn.addEventListener("click", () => {
-          if (connectBtn.disabled) return;
-          connectBtn.disabled = true;
-          connectBtn.textContent = "Connexion…";
-          const target = window.top || window;
-          target.location.href = cfg.url;
-        });
-'@.TrimEnd()
-$ui = Replace-RegexOnce -Text $ui -Pattern $connectPattern -Replacement $connectReplacement -Label "Handler OAuth hybride"
-
-# Friendly message if the old masked-value bug already damaged .env.
-$initPattern = '(?m)^  J\.mountAtmosphere\(\);[ \t]*$'
-$initReplacement = @'
-  J.mountAtmosphere();
-
-  const shinoParams = new URLSearchParams(window.location.search);
-  if (shinoParams.get("google_error") === "invalid_client_config") {
-    window.setTimeout(() => J.notify({
-      kind: "error",
-      text: "Google OAuth : les identifiants enregistrés sont invalides. Recopie une fois le vrai Client ID et le vrai Client Secret, puis Sauvegarder.",
-    }), 150);
-  }
-'@.TrimEnd()
-$ui = Replace-RegexOnce -Text $ui -Pattern $initPattern -Replacement $initReplacement -Label "INIT Capabilities"
-Set-Content -Path $CapabilitiesPath -Value $ui -Encoding UTF8
-
-# -----------------------------------------------------------------------------
-# 3) Cache-bust only this repaired page.
-# -----------------------------------------------------------------------------
+# Cache-bust the repaired page so Chrome cannot reuse the broken JS.
 $html = Get-Content $CapabilitiesHtmlPath -Raw -Encoding UTF8
 $oldScript = '<script src="/capabilities.js"></script>'
-$newScript = '<script src="/capabilities.js?v=shino-oauth-clean-2"></script>'
+$newScript = '<script src="/capabilities.js?v=shino-oauth-clean-3"></script>'
 if (-not $html.Contains($oldScript)) {
   throw "Script capabilities.html upstream inattendu; patch SHINO refuse."
 }
