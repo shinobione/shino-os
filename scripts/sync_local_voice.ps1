@@ -99,6 +99,31 @@ Set-EnvValue "SHINO_HANDY_MODEL" "handy-computer/whisper-large-v3-turbo-gguf/whi
 Set-EnvValue "SHINO_HANDY_DEVICE_INDEX" "0"
 Set-EnvValue "TTS_PROVIDER" "piper"
 
+# Chatterbox conversational profile.
+# A local reference clip is optional but is the preferred path for a distinctive, less generic voice.
+# The clip is deliberately kept outside Git under %LOCALAPPDATA%\SHINO-OS\voice\reference.wav.
+$voiceRoot = if ($env:LOCALAPPDATA) {
+  Join-Path $env:LOCALAPPDATA "SHINO-OS\voice"
+} else {
+  Join-Path $RuntimeRoot "voice"
+}
+New-Item -ItemType Directory -Force -Path $voiceRoot | Out-Null
+$voiceReference = Join-Path $voiceRoot "reference.wav"
+
+Set-EnvValue "SHINO_CHATTERBOX_EXAGGERATION" "0.65"
+Set-EnvValue "SHINO_CHATTERBOX_CFG_WEIGHT" "0.30"
+Set-EnvValue "SHINO_CHATTERBOX_TEMPERATURE" "0.75"
+
+if (Test-Path $voiceReference) {
+  $env:SHINO_CHATTERBOX_REFERENCE = $voiceReference
+  Set-EnvValue "SHINO_CHATTERBOX_REFERENCE" $voiceReference
+  Write-Host "[SHINO-OS] Voix de reference Chatterbox active: $voiceReference" -ForegroundColor Cyan
+} else {
+  Remove-Item Env:SHINO_CHATTERBOX_REFERENCE -ErrorAction SilentlyContinue
+  Set-EnvValue "SHINO_CHATTERBOX_REFERENCE" ""
+  Write-Host "[SHINO-OS] Voix Chatterbox generique. Pour une voix plus naturelle: $voiceReference" -ForegroundColor DarkGray
+}
+
 $naturalTtsScript = Join-Path $Root "scripts\ensure_natural_tts.ps1"
 $naturalTtsUrl = ""
 if (Test-Path $naturalTtsScript) {
