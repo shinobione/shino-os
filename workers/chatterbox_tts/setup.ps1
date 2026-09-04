@@ -54,10 +54,17 @@ if ($LASTEXITCODE -ne 0) { throw "Echec mise a jour pip." }
 & $Python -m pip install -r (Join-Path $WorkerRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Echec installation dependances Chatterbox." }
 
-& $Python -c "import torch, chatterbox; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
-if ($LASTEXITCODE -ne 0) { throw "Import Chatterbox/Torch impossible apres installation." }
+$cuda = [string](& $Python -c "import torch; print('true' if torch.cuda.is_available() else 'false')")
+$cuda = $cuda.Trim().ToLowerInvariant()
+Write-Host "[SHINO-OS] Torch CUDA disponible: $cuda" -ForegroundColor Cyan
+if ($cuda -ne "true") {
+  Write-Host "[SHINO-OS] ATTENTION: Chatterbox tournerait sur CPU. Envoie-moi cette sortie avant le test voix." -ForegroundColor Yellow
+}
 
-Write-Host "" 
-Write-Host "[SHINO-OS] Chatterbox worker installe." -ForegroundColor Green
-Write-Host "[SHINO-OS] Le premier demarrage telechargera le modele Multilingual V3 si necessaire." -ForegroundColor Yellow
-Write-Host "[SHINO-OS] Ensuite .\shino.bat run le demarrera automatiquement." -ForegroundColor Cyan
+Write-Host "[SHINO-OS] Prechargement du modele Multilingual V3 (telechargement au premier setup)..." -ForegroundColor Cyan
+& $Python -c "import torch; from chatterbox.mtl_tts import ChatterboxMultilingualTTS; d='cuda' if torch.cuda.is_available() else 'cpu'; print('device', d); m=ChatterboxMultilingualTTS.from_pretrained(device=d, t3_model='v3'); print('ready', m.sr)"
+if ($LASTEXITCODE -ne 0) { throw "Echec telechargement/prechargement Chatterbox Multilingual V3." }
+
+Write-Host ""
+Write-Host "[SHINO-OS] Chatterbox Multilingual V3 pret." -ForegroundColor Green
+Write-Host "[SHINO-OS] Ensuite .\shino.bat run le demarrera automatiquement; Piper restera le fallback." -ForegroundColor Cyan
