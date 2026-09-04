@@ -17,18 +17,19 @@ Le STT local est considéré comme **validé** :
 
 ## Problème restant
 
-La conversation vocale n'est pas encore naturelle pour trois raisons distinctes :
+La conversation vocale n'est pas encore validée comme naturelle. Les problèmes restants sont maintenant concentrés après le STT :
 
-1. **LLM orienté texte** — Qwen produit encore des réponses pensées pour l'écran (longueur, structure, formulations écrites).
-2. **Pipeline sériel** — SHINO attend la réponse LLM complète avant de lancer le TTS.
-3. **Piper** — rapide et local, mais plafond de qualité/prosodie trop bas pour une voix de type assistant premium.
+1. **qualité/prosodie TTS** — Piper reste trop synthétique pour la cible JARVIS ;
+2. **latence de première audio** — à mesurer après passage au streaming par phrases ;
+3. **réponse orale Qwen** — le tag `[voix]` upstream impose déjà des réponses courtes, mais l'obéissance du modèle local doit être validée physiquement ;
+4. **barge-in** — interruption utilisateur pas encore implémentée.
 
 ## Cible UX
 
 ```text
 fin de parole utilisateur
    ↓
-STT Handy (< ~1 s cible, déjà proche)
+STT Handy
    ↓
 Qwen commence à streamer
    ↓
@@ -38,7 +39,7 @@ TTS génère immédiatement la 1re phrase
    ↓
 lecture pendant que Qwen continue
    ↓
-file audio phrase 2 / phrase 3
+queue audio phrase 2 / phrase 3
 ```
 
 Objectifs :
@@ -54,91 +55,99 @@ Objectifs :
 
 ### A2.1 Prompt vocal dédié
 
-- ajouter un mode `voice` au bridge Qwen ;
-- instructions : français naturel, direct, 1–3 phrases par défaut ;
-- pas de Markdown, emojis, listes ou titres dans la couche orale ;
-- éviter les introductions génériques (« Bien sûr », « Excellente question », etc.) ;
-- garder la réponse détaillée disponible à l'écran si nécessaire.
+État : **upstream déjà présent / validation à poursuivre**.
+
+`/api/voice/generate` ajoute `[voix]` au message et le prompt Jarvis contient des règles vocales dédiées. SHINO conserve ce chemin afin de garder mémoire, tools et sessions.
 
 ### A2.2 Streaming par phrases
 
-Remplacer :
+État : **implémenté dans SHINO — validation physique à faire**.
+
+Le bridge chat expose maintenant les deltas du stream LLM. Le bridge voix :
 
 ```text
-attendre réponse complète → TTS complet → lecture
+stream tokens
+→ segmentation sur ponctuation
+→ normalisation orale
+→ queue TTS séquentielle
+→ lecture progressive
 ```
 
-par :
-
-```text
-stream tokens → segmentation phrases → queue TTS → lecture progressive
-```
-
-Le chat continue d'afficher le flux complet pendant que la voix démarre dès la première phrase exploitable.
+La première phrase peut commencer à être synthétisée avant que Qwen ait terminé la réponse complète.
 
 ### A2.3 Nouveau moteur TTS
 
-Piper devient **fallback**, pas moteur cible.
+État : **Chatterbox intégré, installation locale à faire**.
 
-Candidats à benchmarker :
+Architecture :
 
-1. **Chatterbox Multilingual** — candidat principal : français, voix zero-shot, contrôle d'expressivité, modèle ~0.5B ;
-2. **Kokoro-82M** — benchmark latence/CPU, très léger, français mais palette de voix plus limitée ;
-3. **XTTS-v2** — référence secondaire pour voix custom française, plus ancien et plus lourd.
+```text
+SHINO/Jarvis
+   ↓ HTTP local
+worker Chatterbox résident :127.0.0.1:8765
+   ↓
+Chatterbox Multilingual V3 / français
+```
 
-Critères :
+Le worker est isolé du runtime Jarvis dans son propre venv et garde le modèle chargé. Le launcher SHINO :
 
-- naturel français ;
-- timbre crédible pour un assistant masculin/original ;
-- temps de première audio ;
-- RTF ;
-- VRAM/RAM ;
-- fonctionnement Windows ;
-- possibilité de garder le modèle résident ;
-- licence compatible avec l'usage SHINO-OS.
+- démarre automatiquement le worker s'il est installé ;
+- lance un warmup en arrière-plan ;
+- configure `SHINO_TTS_URL` ;
+- retombe automatiquement sur Piper si le worker n'est pas disponible ou si une synthèse échoue.
 
-### A2.4 Barge-in
+Installation Windows :
+
+```powershell
+.\shino.bat tts-setup
+```
+
+Le setup refuse l'installation si moins de 8 GB sont libres sur le disque du runtime.
+
+Moteur cible actuel : **Chatterbox Multilingual V3** (~500M, français natif). Piper reste fallback de sécurité.
+
+### A2.4 Speech rendering
+
+État : **implémenté**.
+
+Avant TTS :
+
+- Markdown retiré ;
+- emojis retirés ;
+- liens nettoyés ;
+- blocs de code non lus caractère par caractère ;
+- listes transformées en pauses ;
+- tics initiaux type `euh/hmm` supprimés.
+
+Le texte affiché dans le chat reste inchangé.
+
+### A2.5 Barge-in
+
+État : **à faire**.
 
 Pendant `SPEAKING` :
 
-- si le micro détecte une nouvelle parole volontaire ;
-- couper immédiatement le buffer audio courant ;
-- passer orb → `LISTENING` ;
+- détecter une nouvelle parole volontaire ;
+- couper immédiatement l'audio courant ;
+- orb → `LISTENING` ;
 - annuler la queue TTS restante ;
 - commencer le nouveau tour.
 
 ## Répartition hardware visée
 
-### Aujourd'hui
+### Validation locale actuelle
 
 ```text
 RTX 3060 12 GB
 ├─ Qwen3 8B / Ollama
-└─ Handy / Whisper Turbo (process ponctuel)
+├─ Handy / Whisper Turbo (process ponctuel)
+└─ Chatterbox V3 résident si VRAM suffisante
+
 CPU
 └─ Piper fallback
 ```
 
-### Cible locale possible
-
-```text
-RTX 3060
-├─ Qwen3 8B
-└─ TTS moderne résident si VRAM acceptable
-Handy
-└─ process STT ponctuel puis libération VRAM
-```
-
-### Cible LAN future
-
-```text
-PC principal / RTX 3060
-└─ Qwen / UI
-
-RTX 3070 Ti LAN
-├─ STT résident
-└─ TTS/vision selon benchmark
-```
+Le test physique doit mesurer la VRAM avec Qwen + Chatterbox simultanés. En cas d'OOM ou de latence excessive, Chatterbox devient candidat prioritaire au futur nœud RTX 3070 Ti LAN.
 
 ## Gate de validation
 
@@ -150,12 +159,13 @@ Le sprint voix n'est considéré réussi que si :
 4. premier son < 2 s médian après fin de parole ;
 5. 20 tours successifs sans blocage ;
 6. interruption utilisateur fonctionnelle ;
-7. TTS jugé subjectivement nettement supérieur à Piper.
+7. TTS jugé subjectivement nettement supérieur à Piper ;
+8. pas d'OOM avec le workload local retenu.
 
 ## Runtime — rappel
 
 - `shino.bat run` : doit tourner ;
 - **Ollama** : doit tourner actuellement ;
 - **Handy GUI** : peut rester fermé ; seul `handy.exe` + le modèle installé sont nécessaires ;
-- **Piper** : pas de process séparé ; utilisé comme fallback ;
-- futur TTS résident : sera lancé/arrêté par SHINO, pas manuellement.
+- **Chatterbox GUI** : aucune GUI ; le worker est lancé automatiquement par SHINO après `tts-setup` ;
+- **Piper** : pas de process séparé ; fallback automatique.
