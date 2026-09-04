@@ -6,6 +6,7 @@
   const VISION_LOADER_ID = 'shino-vision-loader';
   const GESTURE_LOADER_ID = 'shino-gesture-loader';
   const CONTROL_LOADER_ID = 'shino-control-loader';
+  const MUSIC_LOADER_ID = 'shino-music-loader';
   let attempts = 0;
 
   function ensureScript(id, src, readyFlag, label) {
@@ -36,6 +37,12 @@
       `/static/skills/${VIEW_ID}/zzzzzzzz-controls.js`,
       '__SHINO_CONTROL_BRIDGE__',
       'Control bridge'
+    );
+    ensureScript(
+      MUSIC_LOADER_ID,
+      `/static/skills/${VIEW_ID}/zzzzzzzzz-music.js`,
+      '__SHINO_MUSIC_BRIDGE__',
+      'Music bridge'
     );
   }
 
