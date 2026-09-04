@@ -107,7 +107,7 @@ if (-not (Wait-PortFree -ListenPort $Port -TimeoutMs 6000)) {
 $remaining = @(Get-ListenerPids -ListenPort $Port)
 if ($remaining.Count) {
   $details = @($remaining | ForEach-Object { Describe-Process -Id $_ }) -join ', '
-  Write-Shino "Impossible de liberer le port $Port: $details" Red
+  Write-Shino "Impossible de liberer le port ${Port}: $details" Red
   exit 1
 }
 
