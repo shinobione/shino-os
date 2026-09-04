@@ -22,7 +22,8 @@ jobs:
             extensions/views/shino-command-center/tool.py \
             extensions/views/shino-command-center/skill.py \
             runtime_overlay/jarvis/interfaces/api/shino_local_voice.py \
-            workers/whisper_node/server.py
+            workers/whisper_node/server.py \
+            workers/chatterbox_tts/server.py
 
   windows-launcher:
     runs-on: windows-latest
@@ -31,7 +32,13 @@ jobs:
       - name: Parse PowerShell launchers
         shell: powershell
         run: |
-          foreach ($file in @('.\shino.ps1', '.\scripts\sync_global_nav.ps1', '.\scripts\sync_local_voice.ps1')) {
+          foreach ($file in @(
+            '.\shino.ps1',
+            '.\scripts\sync_global_nav.ps1',
+            '.\scripts\sync_local_voice.ps1',
+            '.\scripts\ensure_natural_tts.ps1',
+            '.\workers\chatterbox_tts\setup.ps1'
+          )) {
             $tokens = $null
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file), [ref]$tokens, [ref]$errors) | Out-Null
@@ -88,8 +95,8 @@ jobs:
           if ($envText -notmatch 'SHINO_STT_BACKEND=handy') { throw 'SHINO_STT_BACKEND not set to handy' }
           if ($envText -notmatch 'SHINO_HANDY_MODEL=handy-computer/whisper-large-v3-turbo-gguf/whisper-large-v3-turbo-Q8_0.gguf') { throw 'Exact Handy Turbo model id not configured' }
           if ($envText -notmatch 'SHINO_HANDY_DEVICE_INDEX=0') { throw 'Handy device index not configured' }
-          if ($envText -notmatch 'TTS_PROVIDER=piper') { throw 'TTS_PROVIDER not set to piper' }
-          Write-Host 'local Handy voice runtime sync: OK'
+          if ($envText -notmatch 'TTS_PROVIDER=piper') { throw 'Piper fallback not configured' }
+          Write-Host 'local voice runtime sync: OK'
       - name: Smoke status on detached HEAD runtime
         shell: powershell
         run: |
