@@ -54,17 +54,44 @@ if ($LASTEXITCODE -ne 0) { throw "Echec mise a jour pip." }
 & $Python -m pip install -r (Join-Path $WorkerRoot "requirements.txt")
 if ($LASTEXITCODE -ne 0) { throw "Echec installation dependances Chatterbox." }
 
-$cuda = [string](& $Python -c "import torch; print('true' if torch.cuda.is_available() else 'false')")
-$cuda = $cuda.Trim().ToLowerInvariant()
-Write-Host "[SHINO-OS] Torch CUDA disponible: $cuda" -ForegroundColor Cyan
-if ($cuda -ne "true") {
-  Write-Host "[SHINO-OS] ATTENTION: Chatterbox tournerait sur CPU. Envoie-moi cette sortie avant le test voix." -ForegroundColor Yellow
+function Get-TorchCudaState {
+  $value = [string](& $Python -c "import torch; print('true' if torch.cuda.is_available() else 'false')")
+  return $value.Trim().ToLowerInvariant()
 }
 
+$cuda = Get-TorchCudaState
+Write-Host "[SHINO-OS] Torch CUDA disponible: $cuda" -ForegroundColor Cyan
+
+if ($cuda -ne "true") {
+  Write-Host "[SHINO-OS] PyTorch CPU detecte; installation du build officiel CUDA 12.4..." -ForegroundColor Yellow
+  & $Python -m pip install --upgrade --force-reinstall `
+    "torch==2.6.0" "torchaudio==2.6.0" `
+    --index-url "https://download.pytorch.org/whl/cu124"
+  if ($LASTEXITCODE -ne 0) {
+    throw "Echec installation PyTorch CUDA 12.4."
+  }
+
+  $cuda = Get-TorchCudaState
+  Write-Host "[SHINO-OS] Torch CUDA apres correction: $cuda" -ForegroundColor Cyan
+}
+
+if ($cuda -ne "true") {
+  Write-Host "[SHINO-OS] CUDA reste indisponible; diagnostic NVIDIA:" -ForegroundColor Yellow
+  if (Get-Command nvidia-smi -ErrorAction SilentlyContinue) {
+    & nvidia-smi
+  } else {
+    Write-Host "[SHINO-OS] nvidia-smi introuvable dans le PATH." -ForegroundColor Yellow
+  }
+  throw "Chatterbox GPU non pret: torch.cuda.is_available() est false. Prechargement CPU refuse."
+}
+
+& $Python -c "import torch; print('torch', torch.__version__, 'cuda_runtime', torch.version.cuda, 'gpu', torch.cuda.get_device_name(0))"
+if ($LASTEXITCODE -ne 0) { throw "Verification GPU PyTorch impossible." }
+
 Write-Host "[SHINO-OS] Prechargement du modele Multilingual V3 (telechargement au premier setup)..." -ForegroundColor Cyan
-& $Python -c "import torch; from chatterbox.mtl_tts import ChatterboxMultilingualTTS; d='cuda' if torch.cuda.is_available() else 'cpu'; print('device', d); m=ChatterboxMultilingualTTS.from_pretrained(device=d, t3_model='v3'); print('ready', m.sr)"
+& $Python -c "from chatterbox.mtl_tts import ChatterboxMultilingualTTS; m=ChatterboxMultilingualTTS.from_pretrained(device='cuda', t3_model='v3'); print('ready', m.sr)"
 if ($LASTEXITCODE -ne 0) { throw "Echec telechargement/prechargement Chatterbox Multilingual V3." }
 
 Write-Host ""
-Write-Host "[SHINO-OS] Chatterbox Multilingual V3 pret." -ForegroundColor Green
+Write-Host "[SHINO-OS] Chatterbox Multilingual V3 pret sur GPU." -ForegroundColor Green
 Write-Host "[SHINO-OS] Ensuite .\shino.bat run le demarrera automatiquement; Piper restera le fallback." -ForegroundColor Cyan
