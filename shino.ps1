@@ -170,10 +170,12 @@ function Stop-StaleJarvisRuntime([int]$Port) {
     } | Select-Object -ExpandProperty ProcessId -Unique)
   } catch { $victims = @() }
 
-  foreach ($pid in $victims) {
-    if ($pid -le 4 -or $pid -eq $PID) { continue }
-    try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch { }
-    try { & taskkill.exe /PID $pid /T /F *> $null } catch { }
+  # IMPORTANT: never use $pid here. PowerShell variables are case-insensitive,
+  # so $pid aliases the built-in read-only automatic variable $PID.
+  foreach ($victimProcessId in $victims) {
+    if ($victimProcessId -le 4 -or $victimProcessId -eq $PID) { continue }
+    try { Stop-Process -Id $victimProcessId -Force -ErrorAction SilentlyContinue } catch { }
+    try { & taskkill.exe /PID $victimProcessId /T /F *> $null } catch { }
   }
 
   # LiveKit is also part of the Jarvis run lifecycle and may survive an aborted
