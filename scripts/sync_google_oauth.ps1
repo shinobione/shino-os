@@ -29,27 +29,31 @@ $CanonicalOrigin = "http://localhost:$Port"
 
 if (-not (Test-Path $GoogleOAuthPath)) { exit 0 }
 
-function Replace-TrimmedLineOnce {
+function Replace-TrimmedLineExact {
   param(
     [string[]]$Lines,
     [string]$Needle,
     [string[]]$Replacement,
-    [string]$Label
+    [string]$Label,
+    [int]$ExpectedCount = 1
   )
 
   $hits = @()
   for ($i = 0; $i -lt $Lines.Count; $i++) {
     if ($Lines[$i].Trim() -eq $Needle) { $hits += $i }
   }
-  if ($hits.Count -ne 1) {
-    throw "${Label}: attendu 1 ligne upstream, trouve $($hits.Count). Patch refuse pour ne pas corrompre Jarvis."
+  if ($hits.Count -ne $ExpectedCount) {
+    throw "${Label}: attendu $ExpectedCount ligne(s) upstream, trouve $($hits.Count). Patch refuse pour ne pas corrompre Jarvis."
   }
 
-  $index = [int]$hits[0]
   $result = @()
-  if ($index -gt 0) { $result += $Lines[0..($index - 1)] }
-  if ($Replacement) { $result += $Replacement }
-  if ($index + 1 -lt $Lines.Count) { $result += $Lines[($index + 1)..($Lines.Count - 1)] }
+  for ($i = 0; $i -lt $Lines.Count; $i++) {
+    if ($hits -contains $i) {
+      if ($Replacement) { $result += $Replacement }
+    } else {
+      $result += $Lines[$i]
+    }
+  }
   return @($result)
 }
 
@@ -73,14 +77,14 @@ $oauthLines = @(Get-Content $GoogleOAuthPath -Encoding UTF8)
 
 # SHINO owns one stable localhost origin. Replace the single return line rather
 # than rewriting the whole function, so upstream comments/newlines cannot break us.
-$oauthLines = Replace-TrimmedLineOnce -Lines $oauthLines `
+$oauthLines = Replace-TrimmedLineExact -Lines $oauthLines `
   -Needle 'return f"{base}/api/google/callback/{service}"' `
   -Replacement @('    return f"' + $CanonicalOrigin + '/api/google/callback/{service}"') `
   -Label "Callback Google OAuth"
 
 # Validate the real credentials immediately before Jarvis regenerates its JSON.
 # Older SHINO builds could save masked placeholders returned by /api/settings.
-$oauthLines = Replace-TrimmedLineOnce -Lines $oauthLines `
+$oauthLines = Replace-TrimmedLineExact -Lines $oauthLines `
   -Needle '_maybe_write_credentials_from_env(request)' `
   -Replacement @(
     '    if os.getenv("SHINO_OS") == "1":',
@@ -107,8 +111,9 @@ Set-Content -Path $GoogleOAuthPath -Value ($oauthLines -join [Environment]::NewL
 # -----------------------------------------------------------------------------
 $uiLines = @(Get-Content $CapabilitiesPath -Encoding UTF8)
 
-# Never put masked API values back into editable inputs.
-$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'const v = (ss.api_keys || {})[f.key] || "";' -Replacement @(
+# Jarvis has two masked-value prefill sites: connector fields and skill config.
+# Protect both, otherwise a masked placeholder can still be saved back to .env.
+$uiLines = Replace-TrimmedLineExact -Lines $uiLines -Needle 'const v = (ss.api_keys || {})[f.key] || "";' -ExpectedCount 2 -Replacement @(
   '            const configured = Boolean((ss.api_keys || {})[f.key]);',
   '            if (configured) {',
   '              inp.dataset.configured = "1";',
@@ -117,15 +122,15 @@ $uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'const v = (ss.api_ke
   '                : "Déjà configuré — laisser vide pour conserver";',
   '            }'
 ) -Label "Credentials masques"
-$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'if (v) inp.value = v;' -Replacement @() -Label "Ancien pre-remplissage masque"
+$uiLines = Replace-TrimmedLineExact -Lines $uiLines -Needle 'if (v) inp.value = v;' -ExpectedCount 2 -Replacement @() -Label "Ancien pre-remplissage masque"
 
 # OAuth must leave Jarvis' persistent iframe but remain in the SAME browser tab.
-$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'window.location.href = cfg.url;' -Replacement @(
+$uiLines = Replace-TrimmedLineExact -Lines $uiLines -Needle 'window.location.href = cfg.url;' -Replacement @(
   '      const target = window.top || window;',
   '      target.location.href = cfg.url;'
 ) -Label "Navigation OAuth simple"
 
-$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });' -Replacement @(
+$uiLines = Replace-TrimmedLineExact -Lines $uiLines -Needle 'connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });' -Replacement @(
   '        connectBtn.addEventListener("click", () => {',
   '          if (connectBtn.disabled) return;',
   '          connectBtn.disabled = true;',
@@ -135,7 +140,7 @@ $uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'connectBtn.addEventL
   '        });'
 ) -Label "Handler OAuth hybride"
 
-$uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'J.mountAtmosphere();' -Replacement @(
+$uiLines = Replace-TrimmedLineExact -Lines $uiLines -Needle 'J.mountAtmosphere();' -Replacement @(
   '  J.mountAtmosphere();',
   '',
   '  const shinoParams = new URLSearchParams(window.location.search);',
@@ -156,7 +161,7 @@ Set-Content -Path $CapabilitiesPath -Value $uiText -Encoding UTF8
 
 # Cache-bust repaired Capabilities JS so Chrome cannot reuse an older broken copy.
 $htmlLines = @(Get-Content $CapabilitiesHtmlPath -Encoding UTF8)
-$htmlLines = Replace-TrimmedLineOnce -Lines $htmlLines `
+$htmlLines = Replace-TrimmedLineExact -Lines $htmlLines `
   -Needle '<script src="/capabilities.js"></script>' `
   -Replacement @('<script src="/capabilities.js?v=shino-oauth-clean-4"></script>') `
   -Label "Script Capabilities"
