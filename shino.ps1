@@ -50,14 +50,10 @@ function Ensure-Upstream {
   if (-not (Test-Path (Join-Path $JarvisDir ".git"))) {
     Write-Shino "Clonage de Jarvis OS hors OneDrive: $JarvisDir"
     git clone $lock.repository $JarvisDir
-    if ($LASTEXITCODE -ne 0) {
-      throw "Echec du clone de Jarvis OS."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Echec du clone de Jarvis OS." }
 
     git -C $JarvisDir checkout --detach $lock.ref
-    if ($LASTEXITCODE -ne 0) {
-      throw "Impossible de checkout le commit upstream $($lock.ref)."
-    }
+    if ($LASTEXITCODE -ne 0) { throw "Impossible de checkout le commit upstream $($lock.ref)." }
     Write-Shino "Runtime initial verrouille sur $($lock.ref)."
   }
 }
@@ -66,7 +62,6 @@ function Ensure-SetupBundle {
   $manifest = Join-Path $JarvisDir "bundle\manifest.json"
   $bundlePython = Join-Path $JarvisDir "bundle\.venv\Scripts\python.exe"
   $devPython = Join-Path $JarvisDir ".venv\Scripts\python.exe"
-
   if ((Test-Path $manifest) -and (Test-Path $bundlePython)) { return }
   if (Test-Path $devPython) { return }
 
@@ -79,7 +74,6 @@ function Ensure-SetupBundle {
   Write-Shino "Installation du bundle Windows officiel Jarvis (~658 MB)..."
   . $downloader
   Install-JarvisBundle -ProjectRoot $JarvisDir
-
   if (-not ((Test-Path $manifest) -and (Test-Path $bundlePython))) {
     throw "Le bundle Jarvis ne semble pas utilisable apres telechargement."
   }
@@ -95,28 +89,20 @@ function Set-ShinoEnvironment {
 function Get-JarvisPort {
   $port = $DefaultShinoPort
   $envPath = Join-Path $JarvisDir ".env"
-
   if (Test-Path $envPath) {
     $line = Get-Content $envPath -Encoding UTF8 | Where-Object { $_ -match "^\s*PORT\s*=\s*\d+\s*$" } | Select-Object -First 1
-    if ($line -and ($line -match "=\s*(\d+)\s*$")) {
-      $port = [int]$Matches[1]
-    }
+    if ($line -and ($line -match "=\s*(\d+)\s*$")) { $port = [int]$Matches[1] }
   }
-
   return $port
 }
 
 function Set-JarvisPort {
   param([int]$Port)
-
   $envPath = Join-Path $JarvisDir ".env"
-  if (-not (Test-Path $envPath)) {
-    throw "Fichier .env Jarvis introuvable: $envPath"
-  }
+  if (-not (Test-Path $envPath)) { throw "Fichier .env Jarvis introuvable: $envPath" }
 
   $lines = @(Get-Content $envPath -Encoding UTF8)
   $replaced = $false
-
   for ($i = 0; $i -lt $lines.Count; $i++) {
     if ($lines[$i] -match "^\s*PORT\s*=") {
       $lines[$i] = "PORT=$Port"
@@ -124,11 +110,7 @@ function Set-JarvisPort {
       break
     }
   }
-
-  if (-not $replaced) {
-    $lines += "PORT=$Port"
-  }
-
+  if (-not $replaced) { $lines += "PORT=$Port" }
   Set-Content -Path $envPath -Value $lines -Encoding UTF8
 }
 
@@ -139,17 +121,13 @@ function Get-ShinoStableJarvisPort {
     if (-not [int]::TryParse($env:SHINO_JARVIS_PORT, [ref]$parsed)) {
       throw "SHINO_JARVIS_PORT invalide: $($env:SHINO_JARVIS_PORT)"
     }
-    if ($parsed -lt 1 -or $parsed -gt 65535) {
-      throw "SHINO_JARVIS_PORT hors plage: $parsed"
-    }
+    if ($parsed -lt 1 -or $parsed -gt 65535) { throw "SHINO_JARVIS_PORT hors plage: $parsed" }
     $port = $parsed
   }
   return $port
 }
 
 function Ensure-StableJarvisPort {
-  # SHINO uses one dedicated high port instead of fighting generic localhost:8000.
-  # The port stays fixed across runs so OAuth redirect URIs remain stable.
   $stablePort = Get-ShinoStableJarvisPort
   $configuredPort = Get-JarvisPort
   if ($configuredPort -ne $stablePort) {
@@ -161,10 +139,74 @@ function Ensure-StableJarvisPort {
   return $stablePort
 }
 
+function Get-PortListenerPids([int]$Port) {
+  try {
+    return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction Stop |
+      ForEach-Object { [int]$_.OwningProcess } |
+      Where-Object { $_ -gt 0 } |
+      Select-Object -Unique)
+  } catch {
+    $ids = @()
+    foreach ($line in @(netstat -ano -p tcp 2>$null)) {
+      if ($line -match (":$Port\s+.*LISTENING\s+(\d+)\s*$")) { $ids += [int]$Matches[1] }
+    }
+    return @($ids | Where-Object { $_ -gt 0 } | Select-Object -Unique)
+  }
+}
+
+function Stop-StaleJarvisRuntime([int]$Port) {
+  # Reap the WHOLE previous Jarvis runtime, not only the PID observed once on the
+  # API port. Ctrl+C through nested batch files used to orphan hidden cmd/python
+  # children; killing the whole runtime tree prevents a parent from re-binding.
+  $escapedRuntime = [regex]::Escape($JarvisDir)
+  $victims = @()
+  try {
+    $victims = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+      $cmd = [string]$_.CommandLine
+      $name = [string]$_.Name
+      if (-not $cmd) { return $false }
+      if ($cmd -notmatch $escapedRuntime) { return $false }
+      return $name -match '^(python|pythonw|cmd|powershell|pwsh)\.exe$'
+    } | Select-Object -ExpandProperty ProcessId -Unique)
+  } catch { $victims = @() }
+
+  foreach ($pid in $victims) {
+    if ($pid -le 4 -or $pid -eq $PID) { continue }
+    try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch { }
+    try { & taskkill.exe /PID $pid /T /F *> $null } catch { }
+  }
+
+  # LiveKit is also part of the Jarvis run lifecycle and may survive an aborted
+  # parent shell. Killing it here is safe because SHINO launches its own instance.
+  try { Stop-Process -Name 'livekit-server' -Force -ErrorAction SilentlyContinue } catch { }
+
+  $deadline = (Get-Date).AddSeconds(6)
+  do {
+    $listeners = @(Get-PortListenerPids -Port $Port)
+    if (-not $listeners.Count) {
+      if ($victims.Count) { Write-Shino "Ancien runtime Jarvis nettoye avant demarrage." }
+      return
+    }
+
+    # Re-resolve on every pass: a stale parent may have spawned a replacement PID
+    # between the first observation and taskkill.
+    foreach ($listenerPid in $listeners) {
+      if ($listenerPid -le 4 -or $listenerPid -eq $PID) { continue }
+      try { Stop-Process -Id $listenerPid -Force -ErrorAction SilentlyContinue } catch { }
+      try { & taskkill.exe /PID $listenerPid /T /F *> $null } catch { }
+    }
+    Start-Sleep -Milliseconds 180
+  } while ((Get-Date) -lt $deadline)
+
+  $left = @(Get-PortListenerPids -Port $Port)
+  if ($left.Count) {
+    throw "Port $Port toujours occupe apres nettoyage du runtime Jarvis (PID: $($left -join ', '))."
+  }
+}
+
 function Sync-ShinoInstalledViews {
   $viewsRoot = Join-Path $ExtensionsRoot "views"
   if (-not (Test-Path $viewsRoot)) { return }
-
   $staticRoot = Join-Path $JarvisDir "src\jarvis\interfaces\ui\static\skills"
   $installedRoot = Join-Path $JarvisDir "skills_data\installed"
   New-Item -ItemType Directory -Force -Path $staticRoot | Out-Null
@@ -175,7 +217,6 @@ function Sync-ShinoInstalledViews {
     $skillYaml = Join-Path $viewDir.FullName "skill.yaml"
     $skillPy = Join-Path $viewDir.FullName "skill.py"
     $viewJs = Join-Path $viewDir.FullName "view.js"
-
     if (-not (Test-Path $skillYaml) -or -not (Test-Path $skillPy) -or -not (Test-Path $viewJs)) {
       Write-Shino "Vue ignoree (packaging incomplet): $name"
       continue
@@ -183,21 +224,16 @@ function Sync-ShinoInstalledViews {
 
     $staticDest = Join-Path $staticRoot $name
     $installedDest = Join-Path $installedRoot $name
-
     if (Test-Path $staticDest) { Remove-Item $staticDest -Recurse -Force }
     if (Test-Path $installedDest) { Remove-Item $installedDest -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $staticDest | Out-Null
     New-Item -ItemType Directory -Force -Path $installedDest | Out-Null
 
-    Get-ChildItem -Path $viewDir.FullName -File | Where-Object {
-      $_.Extension -in @(".js", ".css")
-    } | ForEach-Object {
+    Get-ChildItem -Path $viewDir.FullName -File | Where-Object { $_.Extension -in @('.js', '.css') } | ForEach-Object {
       Copy-Item $_.FullName (Join-Path $staticDest $_.Name) -Force
     }
-
-    Copy-Item $skillYaml (Join-Path $installedDest "skill.yaml") -Force
-    Copy-Item $skillPy (Join-Path $installedDest "skill.py") -Force
-
+    Copy-Item $skillYaml (Join-Path $installedDest 'skill.yaml') -Force
+    Copy-Item $skillPy (Join-Path $installedDest 'skill.py') -Force
     Write-Shino "Vue Jarvis synchronisee: $name"
   }
 }
@@ -213,30 +249,29 @@ function Invoke-Jarvis([string]$JarvisCommand) {
   Ensure-Upstream
   Set-ShinoEnvironment
 
-  if ($JarvisCommand -eq "setup") {
-    Ensure-SetupBundle
-  }
+  if ($JarvisCommand -eq 'setup') { Ensure-SetupBundle }
 
-  if ($JarvisCommand -in @("run", "api")) {
+  $activePort = $null
+  if ($JarvisCommand -in @('run', 'api')) {
     $activePort = Ensure-StableJarvisPort
+    Stop-StaleJarvisRuntime -Port $activePort
     Write-Shino "Port Jarvis: $activePort"
   }
 
   Sync-ShinoInstalledViews
-  if ($JarvisCommand -in @("run", "api")) {
-    Sync-LocalVoiceRuntime
-  }
+  if ($JarvisCommand -in @('run', 'api')) { Sync-LocalVoiceRuntime }
 
-  $launcher = Join-Path $JarvisDir "jarvis.bat"
-  if (-not (Test-Path $launcher)) {
-    throw "Lanceur Jarvis introuvable: $launcher"
-  }
+  # IMPORTANT: call jarvis.ps1 directly. Going through jarvis.bat created a second
+  # cmd.exe Ctrl+C layer (the double 'Terminer le programme de commandes ?' prompt)
+  # and could kill the parent before Jarvis' finally block reaped hidden children.
+  $launcher = Join-Path $JarvisDir 'jarvis.ps1'
+  if (-not (Test-Path $launcher)) { throw "Lanceur Jarvis introuvable: $launcher" }
 
   Write-Shino "Jarvis backend + extensions SHINO: $JarvisCommand"
   Push-Location $JarvisDir
   try {
     & $launcher $JarvisCommand
-    $code = $LASTEXITCODE
+    $code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }
   } finally {
     Pop-Location
   }
@@ -252,39 +287,38 @@ function Show-Status {
   Write-Shino "Jarvis runtime: $JarvisDir"
   Write-Shino "Upstream pin: $($lock.ref)"
 
-  if (Test-Path (Join-Path $JarvisDir ".git")) {
+  if (Test-Path (Join-Path $JarvisDir '.git')) {
     $sha = (git -C $JarvisDir rev-parse HEAD).Trim()
     $branch = (git -C $JarvisDir rev-parse --abbrev-ref HEAD).Trim()
-    if ($branch -eq "HEAD") { $branch = "(detached)" }
+    if ($branch -eq 'HEAD') { $branch = '(detached)' }
     Write-Shino "Runtime Jarvis: $sha $branch"
     Write-Shino "Au pin: $($sha -eq $lock.ref)"
     Write-Shino "Port configure: $(Get-JarvisPort)"
-    Write-Shino "Bundle present: $(Test-Path (Join-Path $JarvisDir "bundle\manifest.json"))"
-    Write-Shino ".env present: $(Test-Path (Join-Path $JarvisDir ".env"))"
-    Write-Shino "Command Center stage: $(Test-Path (Join-Path $JarvisDir "skills_data\installed\shino-command-center\skill.yaml"))"
+    Write-Shino "Bundle present: $(Test-Path (Join-Path $JarvisDir 'bundle\manifest.json'))"
+    Write-Shino ".env present: $(Test-Path (Join-Path $JarvisDir '.env'))"
+    Write-Shino "Command Center stage: $(Test-Path (Join-Path $JarvisDir 'skills_data\installed\shino-command-center\skill.yaml'))"
   } else {
-    Write-Shino "Runtime Jarvis: non installe."
+    Write-Shino 'Runtime Jarvis: non installe.'
   }
 }
 
 function Update-Upstream {
   Require-Git
   Ensure-Upstream
-
-  Write-Shino "Mise a jour volontaire vers origin/main..."
+  Write-Shino 'Mise a jour volontaire vers origin/main...'
   git -C $JarvisDir fetch origin --prune
-  if ($LASTEXITCODE -ne 0) { throw "Echec du fetch upstream." }
+  if ($LASTEXITCODE -ne 0) { throw 'Echec du fetch upstream.' }
   git -C $JarvisDir checkout --detach origin/main
-  if ($LASTEXITCODE -ne 0) { throw "Echec du checkout origin/main." }
+  if ($LASTEXITCODE -ne 0) { throw 'Echec du checkout origin/main.' }
   $sha = (git -C $JarvisDir rev-parse HEAD).Trim()
   Write-Shino "Runtime mis a jour: $sha"
 }
 
 switch ($Command) {
-  "setup"  { Invoke-Jarvis "setup" }
-  "run"    { Invoke-Jarvis "run" }
-  "api"    { Invoke-Jarvis "api" }
-  "doctor" { Invoke-Jarvis "doctor" }
-  "update" { Update-Upstream }
-  "status" { Show-Status }
+  'setup'  { Invoke-Jarvis 'setup' }
+  'run'    { Invoke-Jarvis 'run' }
+  'api'    { Invoke-Jarvis 'api' }
+  'doctor' { Invoke-Jarvis 'doctor' }
+  'update' { Update-Upstream }
+  'status' { Show-Status }
 }
