@@ -12,15 +12,23 @@ import torch
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="SHINO Chatterbox TTS Worker", version="0.1.0")
+app = FastAPI(title="SHINO Chatterbox TTS Worker", version="0.2.0")
 
 _model = None
 _model_lock = threading.Lock()
+_synth_lock = threading.Lock()
 _load_started_at = 0.0
 _loaded_at = 0.0
 _last_error = ""
 _device = ""
 _sample_rate = 0
+_last_synth_ms = 0.0
+_last_reference = ""
+_last_reference_duration = 0.0
+_synth_count = 0
+_conditioned_reference = ""
+_conditioned_reference_mtime = 0.0
+_conditioning_ms = 0.0
 
 
 class SynthesisRequest(BaseModel):
@@ -51,6 +59,63 @@ def _resolve_reference(body: SynthesisRequest) -> str | None:
     return str(path)
 
 
+def _reference_duration(path: str | None) -> float:
+    if not path:
+        return 0.0
+    try:
+        with wave.open(path, "rb") as wf:
+            rate = wf.getframerate()
+            if rate <= 0:
+                return 0.0
+            return float(wf.getnframes()) / float(rate)
+    except Exception:
+        return 0.0
+
+
+def _cuda_stats() -> dict[str, object]:
+    if not torch.cuda.is_available():
+        return {
+            "cuda_available": False,
+            "gpu": None,
+            "cuda_allocated_mb": None,
+            "cuda_reserved_mb": None,
+            "cuda_free_mb": None,
+            "cuda_total_mb": None,
+        }
+    try:
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        return {
+            "cuda_available": True,
+            "gpu": torch.cuda.get_device_name(0),
+            "cuda_allocated_mb": round(torch.cuda.memory_allocated() / (1024 * 1024), 1),
+            "cuda_reserved_mb": round(torch.cuda.memory_reserved() / (1024 * 1024), 1),
+            "cuda_free_mb": round(free_bytes / (1024 * 1024), 1),
+            "cuda_total_mb": round(total_bytes / (1024 * 1024), 1),
+        }
+    except Exception:
+        return {
+            "cuda_available": True,
+            "gpu": torch.cuda.get_device_name(0),
+            "cuda_allocated_mb": None,
+            "cuda_reserved_mb": None,
+            "cuda_free_mb": None,
+            "cuda_total_mb": None,
+        }
+
+
+def _error_detail(exc: Exception) -> str:
+    detail = f"{type(exc).__name__}: {exc}"
+    stats = _cuda_stats()
+    if stats.get("cuda_available"):
+        detail += (
+            f" | CUDA allocated={stats.get('cuda_allocated_mb')} MB"
+            f", reserved={stats.get('cuda_reserved_mb')} MB"
+            f", free={stats.get('cuda_free_mb')} MB"
+            f", total={stats.get('cuda_total_mb')} MB"
+        )
+    return detail[:1800]
+
+
 def _ensure_model():
     global _model, _load_started_at, _loaded_at, _last_error, _device, _sample_rate
     if _model is not None:
@@ -69,9 +134,31 @@ def _ensure_model():
             _last_error = ""
             return _model
         except Exception as exc:
-            _last_error = str(exc)[:1000]
+            _last_error = _error_detail(exc)
             _model = None
             raise
+
+
+def _prepare_reference_once(model, reference: str | None, exaggeration: float) -> None:
+    global _conditioned_reference, _conditioned_reference_mtime, _conditioning_ms
+    global _last_reference, _last_reference_duration
+
+    if not reference:
+        return
+
+    path = Path(reference)
+    mtime = path.stat().st_mtime
+    _last_reference = reference
+    _last_reference_duration = _reference_duration(reference)
+
+    if _conditioned_reference == reference and _conditioned_reference_mtime == mtime:
+        return
+
+    started = time.perf_counter()
+    model.prepare_conditionals(reference, exaggeration=exaggeration)
+    _conditioning_ms = round((time.perf_counter() - started) * 1000, 1)
+    _conditioned_reference = reference
+    _conditioned_reference_mtime = mtime
 
 
 def _to_wav_bytes(wav_tensor, sample_rate: int) -> bytes:
@@ -98,17 +185,23 @@ def _to_wav_bytes(wav_tensor, sample_rate: int) -> bytes:
 @app.get("/health")
 def health() -> dict[str, object]:
     loaded = _model is not None
-    return {
+    result = {
         "ok": True,
         "engine": "chatterbox-multilingual-v3",
         "loaded": loaded,
         "loading": bool(_load_started_at and not loaded and not _last_error),
         "device": _device or None,
-        "cuda_available": bool(torch.cuda.is_available()),
-        "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
         "sample_rate": _sample_rate or None,
         "last_error": _last_error or None,
+        "last_synth_ms": _last_synth_ms or None,
+        "synth_count": _synth_count,
+        "conditioned_reference": _conditioned_reference or None,
+        "last_reference": _last_reference or None,
+        "reference_duration_s": round(_last_reference_duration, 2) if _last_reference_duration else None,
+        "conditioning_ms": _conditioning_ms or None,
     }
+    result.update(_cuda_stats())
+    return result
 
 
 @app.post("/warmup")
@@ -117,18 +210,22 @@ def warmup() -> dict[str, object]:
     try:
         model = _ensure_model()
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {
+        raise HTTPException(status_code=503, detail=_error_detail(exc)) from exc
+    result = {
         "ok": True,
         "engine": "chatterbox-multilingual-v3",
         "device": _device,
         "sample_rate": int(model.sr),
         "load_ms": round((time.perf_counter() - started) * 1000, 1),
     }
+    result.update(_cuda_stats())
+    return result
 
 
 @app.post("/synthesize")
 def synthesize(body: SynthesisRequest) -> Response:
+    global _last_error, _last_synth_ms, _last_reference, _last_reference_duration, _synth_count
+
     text = body.text.strip()
     if not text:
         return Response(content=b"", media_type="audio/wav")
@@ -136,23 +233,33 @@ def synthesize(body: SynthesisRequest) -> Response:
         raise HTTPException(status_code=413, detail="Segment TTS trop long (>1200 caracteres)")
 
     try:
-        model = _ensure_model()
-        reference = _resolve_reference(body)
-        kwargs = {
-            "language_id": body.language_id or "fr",
-            "exaggeration": body.exaggeration,
-            "cfg_weight": body.cfg_weight,
-            "temperature": body.temperature,
-        }
-        if reference:
-            kwargs["audio_prompt_path"] = reference
-        started = time.perf_counter()
-        wav = model.generate(text, **kwargs)
-        infer_ms = round((time.perf_counter() - started) * 1000, 1)
-        payload = _to_wav_bytes(wav, int(model.sr))
+        with _synth_lock:
+            model = _ensure_model()
+            reference = _resolve_reference(body)
+            _last_reference = reference or ""
+            _last_reference_duration = _reference_duration(reference)
+
+            # Chatterbox recomputes voice conditioning every time audio_prompt_path is
+            # passed to generate(). SHINO streams sentence by sentence, so that would
+            # unnecessarily re-encode the same reference for every sentence. Cache the
+            # conditionals once per reference file/mtime and then generate from them.
+            _prepare_reference_once(model, reference, body.exaggeration)
+
+            kwargs = {
+                "language_id": body.language_id or "fr",
+                "exaggeration": body.exaggeration,
+                "cfg_weight": body.cfg_weight,
+                "temperature": body.temperature,
+            }
+            started = time.perf_counter()
+            wav = model.generate(text, audio_prompt_path=None, **kwargs)
+            infer_ms = round((time.perf_counter() - started) * 1000, 1)
+            payload = _to_wav_bytes(wav, int(model.sr))
+            _last_synth_ms = infer_ms
+            _synth_count += 1
+            _last_error = ""
     except Exception as exc:
-        global _last_error
-        _last_error = str(exc)[:1000]
+        _last_error = _error_detail(exc)
         raise HTTPException(status_code=500, detail=_last_error) from exc
 
     return Response(
@@ -162,5 +269,6 @@ def synthesize(body: SynthesisRequest) -> Response:
             "X-SHINO-TTS": "chatterbox-v3",
             "X-SHINO-TTS-DEVICE": _device,
             "X-SHINO-TTS-MS": str(infer_ms),
+            "X-SHINO-TTS-REF": "1" if _last_reference else "0",
         },
     )
