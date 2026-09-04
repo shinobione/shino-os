@@ -1,0 +1,143 @@
+#shino-command-center-container .sho-skills {
+  position: relative;
+  overflow: hidden;
+}
+#shino-command-center-container .sho-music-host {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(8px);
+  transition: opacity .18s ease, transform .18s ease, visibility .18s step-end;
+}
+#shino-command-center-container .sho-music-host.is-open {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition: opacity .18s ease, transform .18s ease, visibility 0s;
+}
+#shino-command-center-container .sho-skills.sho-music-mode > .sho-title,
+#shino-command-center-container .sho-skills.sho-music-mode > .sho-list {
+  opacity: 0;
+  pointer-events: none;
+}
+#shino-command-center-container .sho-music-standby {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  gap: 6px;
+  color: #59788a;
+}
+#shino-command-center-container .sho-music-standby span,
+#shino-command-center-container .sho-music-standby small {
+  font: 500 7px/1 var(--mono,monospace);
+  letter-spacing: .16em;
+}
+#shino-command-center-container .sho-music-standby b {
+  font: 700 12px/1 var(--mono,monospace);
+  letter-spacing: .1em;
+  color: #9ecfe1;
+}
+
+/* Native Jarvis music widget, re-parented inside the SHINO panel. */
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+  transform: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: linear-gradient(180deg, rgba(7,20,33,.86), rgba(3,12,20,.94)) !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-hd {
+  flex: 0 0 56px !important;
+  min-height: 56px !important;
+  padding: 0 18px !important;
+  border-bottom: 1px solid rgba(72,221,255,.12) !important;
+  background: rgba(2,10,17,.32) !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-body {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  padding: 18px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: center !important;
+  gap: 16px !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-music-top {
+  display: grid !important;
+  grid-template-columns: 72px minmax(0,1fr) !important;
+  gap: 14px !important;
+  align-items: center !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-album-art {
+  width: 72px !important;
+  height: 72px !important;
+  border-radius: 7px !important;
+  object-fit: cover !important;
+  background: rgba(72,221,255,.06) !important;
+  border: 1px solid rgba(72,221,255,.12) !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-track-name {
+  font-size: 13px !important;
+  color: #e5f5fc !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-track-artist {
+  margin-top: 6px !important;
+  font-size: 9px !important;
+  color: #6f9bad !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-progress-wrap {
+  height: 4px !important;
+  border-radius: 4px !important;
+  overflow: hidden !important;
+  background: rgba(72,221,255,.09) !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-progress-fill {
+  height: 100% !important;
+  background: #48ddff !important;
+  box-shadow: 0 0 10px rgba(72,221,255,.5) !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-controls {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 14px !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-ctl {
+  width: 38px !important;
+  height: 38px !important;
+  border: 1px solid rgba(72,221,255,.16) !important;
+  border-radius: 50% !important;
+  background: rgba(4,20,31,.72) !important;
+  color: #a9d7e8 !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-play {
+  width: 48px !important;
+  height: 48px !important;
+  border-color: rgba(72,221,255,.4) !important;
+  color: #48ddff !important;
+  box-shadow: 0 0 18px rgba(72,221,255,.1) !important;
+}
+body.shino-home-active #shino-command-center-container #hc-widget-music.sho-music-native .hcw-resize-handle {
+  display: none !important;
+}
