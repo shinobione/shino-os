@@ -35,6 +35,8 @@ jobs:
           foreach ($file in @(
             '.\shino.ps1',
             '.\scripts\sync_global_nav.ps1',
+            '.\scripts\sync_google_oauth.ps1',
+            '.\scripts\cleanup_stale_jarvis.ps1',
             '.\scripts\sync_local_voice.ps1',
             '.\scripts\ensure_natural_tts.ps1',
             '.\workers\chatterbox_tts\setup.ps1'
