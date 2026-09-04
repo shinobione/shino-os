@@ -55,25 +55,29 @@ jobs:
           (function () {
             "use strict";
             const J = { notify: () => {}, mountAtmosphere: () => {}, mountRooms: () => {} };
-            const cfg = { kind: "oauth_key", url: "/api/google/auth/gmail", keys: [] };
-            const connectBtn = { disabled: false, textContent: "", addEventListener: () => {} };
-            const ss = { api_keys: {} };
-            const f = { key: "GOOGLE_CLIENT_ID", secret: false };
-            const inp = { value: "", placeholder: "", dataset: {} };
-            const v = (ss.api_keys || {})[f.key] || "";
-            if (v) inp.value = v;
 
             function triggerConnect(c, cfg, expandEl) {
               if (cfg.kind === "oauth") {
                 window.location.href = cfg.url;
                 return;
               }
-              if (cfg.kind === "oauth_key") {
-                connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });
-              }
-            }
 
-            // console.cloud.google.com · OAuth client type « Web » · Redirect URIs : http://127.0.0.1:8000/api/google/callback/gmail + .../calendar
+              const ss = { api_keys: {} };
+              const f = { key: "GOOGLE_CLIENT_ID", secret: false };
+              const inp = { value: "", placeholder: "", dataset: {} };
+              const connectBtn = { disabled: false, textContent: "", addEventListener: () => {} };
+
+                  if (cfg.kind === "oauth_key") {
+                    const v = (ss.api_keys || {})[f.key] || "";
+                    if (v) inp.value = v;
+                  }
+
+                  // console.cloud.google.com · OAuth client type « Web » · Redirect URIs : http://127.0.0.1:8000/api/google/callback/gmail + .../calendar
+                  const placeholder = true;
+                  if (placeholder) {
+                    connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });
+                  }
+            }
 
             J.mountAtmosphere();
 
