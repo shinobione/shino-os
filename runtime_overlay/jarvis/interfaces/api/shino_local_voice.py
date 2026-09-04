@@ -23,6 +23,7 @@ router = APIRouter(prefix="/api/shino/voice", tags=["shino-local-voice"])
 
 _MAX_PCM_BYTES = 12 * 1024 * 1024
 _HANDY_TIMEOUT_SECONDS = 60.0
+_NATURAL_TTS_TIMEOUT_SECONDS = 45.0
 _DEFAULT_HANDY_MODEL = "whisper-large-v3-turbo"
 _DEFAULT_HANDY_DEVICE_INDEX = "0"
 
@@ -36,10 +37,14 @@ _stt_last_bound_backend = ""
 _stt_last_load_ms: float | None = None
 _stt_last_infer_ms: float | None = None
 _stt_last_rtf: float | None = None
+_tts_last_backend = "piper"
+_tts_last_error = ""
+_tts_last_ms: float | None = None
 
 
 class TTSRequest(BaseModel):
     text: str
+    language_id: str | None = None
 
 
 def _handy_model() -> str:
@@ -48,6 +53,14 @@ def _handy_model() -> str:
 
 def _handy_device_index() -> str:
     return (os.getenv("SHINO_HANDY_DEVICE_INDEX") or _DEFAULT_HANDY_DEVICE_INDEX).strip()
+
+
+def _natural_tts_url() -> str:
+    return (os.getenv("SHINO_TTS_URL") or "").strip().rstrip("/")
+
+
+def _natural_tts_language() -> str:
+    return (os.getenv("SHINO_TTS_LANGUAGE") or "fr").strip() or "fr"
 
 
 def _find_handy_exe() -> Path | None:
@@ -89,13 +102,6 @@ def _write_pcm16_wav(pcm: bytes, path: Path) -> float:
 
 
 def _run_handy_blocking(args: list[str], stdout_path: Path, stderr_path: Path) -> int:
-    """Run Handy with real file handles.
-
-    Handy's Windows release is built as a GUI-subsystem executable. Capturing its
-    stdout/stderr through asyncio PIPEs is unreliable on some Windows builds,
-    while explicit redirected file handles are reliable (and match PowerShell's
-    Start-Process -RedirectStandardOutput/-RedirectStandardError behaviour).
-    """
     creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     with stdout_path.open("wb") as stdout_file, stderr_path.open("wb") as stderr_file:
         completed = subprocess.run(
@@ -199,7 +205,11 @@ async def status() -> dict[str, object]:
         "handy_load_ms": _stt_last_load_ms,
         "handy_transcribe_ms": _stt_last_infer_ms,
         "handy_rtf": _stt_last_rtf,
-        "tts": settings.tts_provider,
+        "tts": _tts_last_backend,
+        "tts_url": _natural_tts_url() or None,
+        "tts_last_ms": _tts_last_ms,
+        "tts_last_error": _tts_last_error or None,
+        "tts_fallback": settings.tts_provider,
         "llm": settings.llm_provider,
     }
 
@@ -301,10 +311,67 @@ async def transcribe(request: Request) -> dict[str, object]:
         }
 
 
+async def _natural_tts(text: str, language_id: str) -> tuple[bytes, str, float] | None:
+    url = _natural_tts_url()
+    if not url:
+        return None
+
+    payload: dict[str, object] = {
+        "text": text,
+        "language_id": language_id,
+        "exaggeration": float(os.getenv("SHINO_CHATTERBOX_EXAGGERATION") or "0.5"),
+        "cfg_weight": float(os.getenv("SHINO_CHATTERBOX_CFG_WEIGHT") or "0.4"),
+        "temperature": float(os.getenv("SHINO_CHATTERBOX_TEMPERATURE") or "0.8"),
+    }
+    reference = (os.getenv("SHINO_CHATTERBOX_REFERENCE") or "").strip()
+    if reference:
+        payload["audio_prompt_path"] = reference
+
+    timeout = httpx.Timeout(_NATURAL_TTS_TIMEOUT_SECONDS, connect=1.0)
+    started = time.perf_counter()
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(url + "/synthesize", json=payload)
+    if response.status_code != 200:
+        detail = response.text[-600:]
+        raise RuntimeError(f"Chatterbox HTTP {response.status_code}: {detail}")
+    elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
+    engine = response.headers.get("X-SHINO-TTS", "chatterbox-v3")
+    return response.content, engine, elapsed_ms
+
+
 @router.post("/tts")
 async def tts(body: TTSRequest) -> Response:
+    global _tts_last_backend, _tts_last_error, _tts_last_ms
+
     text = body.text.strip()
     if not text:
         return Response(content=b"", media_type="audio/wav")
+
+    language_id = (body.language_id or _natural_tts_language()).strip() or "fr"
+    natural_url = _natural_tts_url()
+    if natural_url:
+        try:
+            result = await _natural_tts(text, language_id)
+            if result is not None:
+                audio, engine, elapsed_ms = result
+                _tts_last_backend = engine
+                _tts_last_error = ""
+                _tts_last_ms = elapsed_ms
+                return Response(
+                    content=audio,
+                    media_type="audio/wav",
+                    headers={"X-SHINO-TTS": engine, "X-SHINO-TTS-MS": str(elapsed_ms)},
+                )
+        except Exception as exc:
+            _tts_last_error = str(exc)[:800]
+            logger.warning("SHINO natural TTS failed -> Piper fallback: {}", _tts_last_error)
+
+    started = time.perf_counter()
     audio = await tts_engine.synthesize(text)
-    return Response(content=audio, media_type="audio/wav")
+    _tts_last_backend = "piper"
+    _tts_last_ms = round((time.perf_counter() - started) * 1000, 1)
+    return Response(
+        content=audio,
+        media_type="audio/wav",
+        headers={"X-SHINO-TTS": "piper", "X-SHINO-TTS-MS": str(_tts_last_ms)},
+    )
