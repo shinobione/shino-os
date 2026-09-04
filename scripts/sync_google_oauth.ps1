@@ -13,6 +13,7 @@ if ($env:SHINO_RUNTIME_ROOT) {
 $JarvisDir = Join-Path $RuntimeRoot "jarvis-OS"
 $GoogleOAuthPath = Join-Path $JarvisDir "src\jarvis\interfaces\api\google_oauth.py"
 $CapabilitiesPath = Join-Path $JarvisDir "src\jarvis\interfaces\ui\static\capabilities.js"
+$CapabilitiesHtmlPath = Join-Path $JarvisDir "src\jarvis\interfaces\ui\static\capabilities.html"
 $Port = 18777
 if ($env:SHINO_JARVIS_PORT) {
   $parsed = 0
@@ -67,54 +68,46 @@ if ($oauth.Contains($oldRedirect)) {
   Write-Host "[SHINO-OS] Google OAuth upstream inattendu; callback non modifie." -ForegroundColor Yellow
 }
 
-# OAuth must never create a tab storm. Capabilities runs inside the persistent
-# Jarvis iframe, so open Google from the top shell in one stable named popup.
-# Even if the handler is somehow triggered repeatedly, the same popup is focused
-# instead of creating another browser tab/window.
+# Capabilities is rendered inside Jarvis' persistent iframe. Google refuses to be
+# embedded there, so OAuth MUST escape to the top-level browser tab. Do not use a
+# popup and do not navigate the iframe. A top-level location replacement makes a
+# tab storm structurally impossible: one click = one navigation in the same tab.
 if (Test-Path $CapabilitiesPath) {
   $ui = Get-Content $CapabilitiesPath -Raw -Encoding UTF8
 
-  $oldConnect = 'connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });'
-  $previousConnect = 'connectBtn.addEventListener("click", () => { if (connectBtn.disabled) return; connectBtn.disabled = true; connectBtn.textContent = "Connexion…"; window.location.assign(cfg.url); });'
-  $newConnect = @'
+  $singleTabHandler = @'
 connectBtn.addEventListener("click", () => {
           const topWin = window.top || window;
-          const now = Date.now();
-          const last = Number(topWin.__SHINO_GOOGLE_OAUTH_LAST__ || 0);
-          if (now - last < 1500) return;
-          topWin.__SHINO_GOOGLE_OAUTH_LAST__ = now;
-          const existing = topWin.__SHINO_GOOGLE_OAUTH_WINDOW__;
-          if (existing && !existing.closed) {
-            try { existing.focus(); } catch (_) {}
-            return;
-          }
+          if (topWin.__SHINO_GOOGLE_OAUTH_NAVIGATING__) return;
+          topWin.__SHINO_GOOGLE_OAUTH_NAVIGATING__ = true;
           connectBtn.disabled = true;
           connectBtn.textContent = "Connexion…";
-          const popup = topWin.open(cfg.url, "shino-google-oauth", "popup,width=720,height=820,resizable=yes,scrollbars=yes");
-          if (popup) {
-            topWin.__SHINO_GOOGLE_OAUTH_WINDOW__ = popup;
-            const timer = topWin.setInterval(() => {
-              if (popup.closed) {
-                topWin.clearInterval(timer);
-                connectBtn.disabled = false;
-                connectBtn.textContent = "Connecter mon compte →";
-              }
-            }, 500);
-          } else {
-            connectBtn.disabled = false;
-            connectBtn.textContent = "Connecter mon compte →";
-            J.notify({ kind: "error", text: "Fenêtre Google bloquée par le navigateur." });
-          }
+          topWin.location.assign(cfg.url);
         });
-'@
+'@.Trim()
+
+  # Replace every SHINO/legacy variant we have shipped, then fall back to a narrow
+  # regex around the connector click handler so stale runtime copies are repaired.
+  $variants = @(
+    'connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });',
+    'connectBtn.addEventListener("click", () => { if (connectBtn.disabled) return; connectBtn.disabled = true; connectBtn.textContent = "Connexion…"; window.location.assign(cfg.url); });'
+  )
 
   $changed = $false
-  if ($ui.Contains($oldConnect)) {
-    $ui = $ui.Replace($oldConnect, $newConnect.Trim())
-    $changed = $true
-  } elseif ($ui.Contains($previousConnect)) {
-    $ui = $ui.Replace($previousConnect, $newConnect.Trim())
-    $changed = $true
+  foreach ($variant in $variants) {
+    if ($ui.Contains($variant)) {
+      $ui = $ui.Replace($variant, $singleTabHandler)
+      $changed = $true
+    }
+  }
+
+  if ($ui -match '__SHINO_GOOGLE_OAUTH_WINDOW__') {
+    $popupPattern = 'connectBtn\.addEventListener\("click", \(\) => \{(?s:.*?)topWin\.__SHINO_GOOGLE_OAUTH_WINDOW__(?s:.*?)\}\);'
+    $ui2 = [regex]::Replace($ui, $popupPattern, $singleTabHandler, 1)
+    if ($ui2 -ne $ui) {
+      $ui = $ui2
+      $changed = $true
+    }
   }
 
   # Keep the setup hints aligned with SHINO's actual stable OAuth origin.
@@ -127,10 +120,21 @@ connectBtn.addEventListener("click", () => {
 
   if ($changed) {
     Set-Content -Path $CapabilitiesPath -Value $ui -Encoding UTF8
-    Write-Host "[SHINO-OS] Google OAuth popup unique + anti-rafale actif." -ForegroundColor Cyan
-  } elseif ($ui -match '__SHINO_GOOGLE_OAUTH_WINDOW__') {
-    Write-Host "[SHINO-OS] Google OAuth popup unique deja actif." -ForegroundColor DarkGray
+    Write-Host "[SHINO-OS] Google OAuth single-tab top-level actif (iframe/popup desactives)." -ForegroundColor Cyan
+  } elseif ($ui -match '__SHINO_GOOGLE_OAUTH_NAVIGATING__') {
+    Write-Host "[SHINO-OS] Google OAuth single-tab top-level deja actif." -ForegroundColor DarkGray
   } else {
-    Write-Host "[SHINO-OS] Handler OAuth UI upstream inattendu; anti-rafale non modifie." -ForegroundColor Yellow
+    Write-Host "[SHINO-OS] Handler OAuth UI upstream inattendu; single-tab non modifie." -ForegroundColor Yellow
+  }
+}
+
+# Force browsers to fetch the repaired connector JS instead of reusing an older
+# cached capabilities.js that can still contain the iframe/popup handler.
+if (Test-Path $CapabilitiesHtmlPath) {
+  $html = Get-Content $CapabilitiesHtmlPath -Raw -Encoding UTF8
+  $html2 = [regex]::Replace($html, '<script src="/capabilities\.js(?:\?[^\"]*)?"></script>', '<script src="/capabilities.js?v=shino-oauth-3"></script>')
+  if ($html2 -ne $html) {
+    Set-Content -Path $CapabilitiesHtmlPath -Value $html2 -Encoding UTF8
+    Write-Host "[SHINO-OS] Cache-bust capabilities OAuth applique." -ForegroundColor DarkGray
   }
 }
