@@ -7,6 +7,7 @@
   const GESTURE_LOADER_ID = 'shino-gesture-loader';
   const CONTROL_LOADER_ID = 'shino-control-loader';
   const MUSIC_LOADER_ID = 'shino-music-loader';
+  const WORKSPACE_LOADER_ID = 'shino-workspace-loader';
   let attempts = 0;
 
   function ensureScript(id, src, readyFlag, label) {
@@ -43,6 +44,12 @@
       `/static/skills/${VIEW_ID}/zzzzzzzzz-music.js`,
       '__SHINO_MUSIC_BRIDGE__',
       'Music bridge'
+    );
+    ensureScript(
+      WORKSPACE_LOADER_ID,
+      `/static/skills/${VIEW_ID}/zzzzzzzzzz-workspaces.js`,
+      '__SHINO_WORKSPACE_BRIDGE__',
+      'FILES/PC workspace bridge'
     );
   }
 
