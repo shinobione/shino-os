@@ -61,8 +61,9 @@ function Set-EnvValue([string]$Name, [string]$Value) {
 
 # SHINO voice path: browser mic -> Handy headless/Vulkan -> Ollama -> Piper.
 # handy.exe is auto-detected under %LOCALAPPDATA%\Handy unless SHINO_HANDY_EXE overrides it.
+# Handy runtime model lookup uses the local model key/slug, not the catalog repository id.
 Set-EnvValue "SHINO_STT_BACKEND" "handy"
-Set-EnvValue "SHINO_HANDY_MODEL" "handy-computer/whisper-large-v3-turbo-gguf"
+Set-EnvValue "SHINO_HANDY_MODEL" "whisper-large-v3-turbo"
 Set-EnvValue "SHINO_HANDY_DEVICE_INDEX" "0"
 Set-EnvValue "TTS_PROVIDER" "piper"
 
