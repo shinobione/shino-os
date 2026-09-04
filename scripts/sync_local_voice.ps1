@@ -16,6 +16,7 @@ $AppPath = Join-Path $JarvisDir "src\jarvis\app.py"
 $ApiDir = Join-Path $JarvisDir "src\jarvis\interfaces\api"
 $OverlayRouter = Join-Path $Root "runtime_overlay\jarvis\interfaces\api\shino_local_voice.py"
 $EnvPath = Join-Path $JarvisDir ".env"
+$SystemPromptPath = Join-Path $JarvisDir "prompts\system_static.md"
 
 if (-not (Test-Path $AppPath)) { exit 0 }
 if (-not (Test-Path $OverlayRouter)) { exit 0 }
@@ -43,6 +44,36 @@ if (-not $surface.Success) {
 }
 $content = $content.Insert($surface.Index, $block)
 Set-Content -Path $AppPath -Value $content -Encoding UTF8
+
+# Strengthen upstream [voix] behavior without changing user/session text.
+# This edits only the detached Jarvis runtime and is re-applied idempotently at launch.
+if (Test-Path $SystemPromptPath) {
+  $prompt = Get-Content $SystemPromptPath -Raw -Encoding UTF8
+  $voiceSection = @'
+## Tag [voix]
+Quand un message se termine par `[voix]`, c'est une requête vocale (micro -> STT).
+Règles strictes pour ce mode :
+- Parle en francais oral naturel, comme dans une conversation en face a face.
+- Reponds directement au fond. Pas de preambule de chatbot, pas de "Bien sur", "Excellente question", "Je vais..." si tu peux simplement repondre ou agir.
+- 1 a 2 phrases courtes par defaut; 3 seulement si elles sont vraiment utiles. Developpe uniquement si l'utilisateur le demande.
+- Pas de markdown, listes, titres, emoji, URLs, blocs de code ni mise en forme pensee pour l'ecran.
+- N'enonce jamais les balises techniques ou UI : `[visuel]`, `[son]`, `[tool]`, `[outil]`, `[I]`, `[CF]`, `[BG]`, `[BG:PROJECT]`.
+- Si un outil ou une vue est utilise, dis seulement le resultat utile a l'oral; ne decris pas la plomberie interne.
+- Evite les tics artificiels ("euh", "hmm") et les formulations scolaires. Utilise des phrases simples et naturelles.
+- Une blague doit commencer directement par la blague; une reponse factuelle doit commencer directement par l'information utile.
+- Pour [BG:PROJECT], l'ack oral tient en une seule phrase naturelle.
+- Ignore le `[voix]` a la fin du message utilisateur : c'est un marqueur technique, pas du contenu.
+
+'@
+  $voicePattern = '(?ms)^## Tag \[voix\]\r?\n.*?(?=^## Règles\s*$)'
+  if ([regex]::IsMatch($prompt, $voicePattern)) {
+    $prompt = [regex]::Replace($prompt, $voicePattern, $voiceSection)
+    Set-Content -Path $SystemPromptPath -Value $prompt -Encoding UTF8
+    Write-Host "[SHINO-OS] Style vocal Jarvis renforce: oral court, naturel, sans tags techniques." -ForegroundColor Cyan
+  } else {
+    Write-Host "[SHINO-OS] Section [voix] upstream introuvable; style vocal non modifie." -ForegroundColor Yellow
+  }
+}
 
 function Set-EnvValue([string]$Name, [string]$Value) {
   if (-not (Test-Path $EnvPath)) { return }
