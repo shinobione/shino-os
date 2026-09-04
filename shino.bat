@@ -15,5 +15,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\sync_globa
 if errorlevel 1 exit /b %ERRORLEVEL%
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\sync_google_oauth.ps1"
 if errorlevel 1 exit /b %ERRORLEVEL%
+
+if "%~1"=="" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\cleanup_stale_jarvis.ps1"
+)
+if /I "%~1"=="run" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\cleanup_stale_jarvis.ps1"
+)
+if /I "%~1"=="api" (
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\cleanup_stale_jarvis.ps1"
+)
+
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0shino.ps1" %*
 exit /b %ERRORLEVEL%
