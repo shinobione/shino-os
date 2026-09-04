@@ -128,6 +128,6 @@ jobs:
           if ($ui -notmatch 'target\.location\.href\s*=\s*cfg\.url') { throw 'top-level same-tab OAuth navigation missing' }
           if ($oauth -notmatch 'http://localhost:18777/api/google/callback') { throw 'canonical OAuth callback missing' }
           if ($oauth -notmatch 'invalid_client_config') { throw 'masked/invalid client guard missing' }
-          if ($page -notmatch 'capabilities\.js\?v=shino-oauth-clean-1') { throw 'capabilities cache bust missing' }
+          if ($page -notmatch 'capabilities\.js\?v=shino-oauth-clean-2') { throw 'capabilities cache bust missing' }
 
           Write-Host 'deterministic OAuth runtime patch: OK'
