@@ -1,0 +1,87 @@
+#shino-shell-nav{
+  position:fixed;
+  top:14px;
+  left:50%;
+  transform:translateX(-50%) translateY(-8px);
+  z-index:80;
+  display:flex;
+  align-items:center;
+  width:max-content;
+  max-width:calc(100vw - 24px);
+  gap:2px;
+  padding:5px 6px;
+  border:1px solid rgba(72,221,255,.18);
+  border-radius:10px;
+  background:rgba(2,9,16,.84);
+  box-shadow:0 10px 32px rgba(0,0,0,.3),0 0 22px rgba(48,194,255,.06);
+  backdrop-filter:blur(18px) saturate(135%);
+  -webkit-backdrop-filter:blur(18px) saturate(135%);
+  opacity:0;
+  visibility:hidden;
+  pointer-events:none;
+  transition:opacity .18s ease,transform .18s ease,visibility .18s ease;
+}
+#shino-shell-nav.is-visible{
+  opacity:1;
+  visibility:visible;
+  pointer-events:auto;
+  transform:translateX(-50%) translateY(0);
+}
+#shino-shell-nav button{
+  height:30px;
+  padding:0 9px;
+  border:1px solid transparent;
+  border-radius:7px;
+  background:transparent;
+  color:#86a9bd;
+  font:600 8.5px/1 var(--mono,"Geist Mono",monospace);
+  letter-spacing:.1em;
+  white-space:nowrap;
+  cursor:pointer;
+}
+#shino-shell-nav button:hover,
+#shino-shell-nav button.active{
+  color:#dff8ff;
+  border-color:rgba(72,221,255,.32);
+  background:rgba(14,75,118,.26);
+  box-shadow:inset 0 -2px 0 #48ddff;
+}
+#shino-shell-nav .ssn-brand{
+  color:#48ddff;
+  font-weight:800;
+  letter-spacing:.15em;
+  padding-left:10px;
+  padding-right:10px;
+}
+#shino-shell-nav .ssn-sep,
+#shino-shell-nav .ssn-spacer{
+  flex:0 0 1px;
+  width:1px;
+  height:18px;
+  background:rgba(72,221,255,.14);
+  margin:0 3px;
+}
+#shino-shell-nav .ssn-mc{
+  color:#9bb7c7;
+  padding-left:8px;
+  padding-right:8px;
+}
+body.shino-frame-active #shino-command-center-container{
+  display:none!important;
+  opacity:0!important;
+  pointer-events:none!important;
+}
+body.shino-frame-active .home-orb-wrap{
+  opacity:0!important;
+}
+body.shino-home-active #shino-shell-nav{display:flex}
+@media(max-width:1100px){
+  #shino-shell-nav{
+    top:10px;
+    width:calc(100% - 20px);
+    max-width:none;
+    justify-content:center;
+    overflow-x:auto;
+  }
+  #shino-shell-nav button{padding:0 7px;font-size:8px}
+}

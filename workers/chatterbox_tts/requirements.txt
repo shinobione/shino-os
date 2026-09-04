@@ -1,0 +1,5 @@
+# Chatterbox itself is installed from the pinned official GitHub commit in setup.ps1.
+# Keep worker/runtime dependencies here so the V3 source pin cannot silently fall back to PyPI.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.34,<1
+numpy>=1.24
