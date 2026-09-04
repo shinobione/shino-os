@@ -27,16 +27,18 @@ function Test-ChatterboxHealth {
   }
 }
 
+function Start-Warmup {
+  Start-Process -WindowStyle Hidden powershell.exe -ArgumentList @(
+    '-NoProfile',
+    '-Command',
+    "try { Invoke-RestMethod -Method Post -Uri '$Url/warmup' -TimeoutSec 900 | Out-Null } catch { }"
+  ) | Out-Null
+}
+
 $health = Test-ChatterboxHealth
 if ($health) {
   $env:SHINO_TTS_URL = $Url
-  if (-not $health.loaded) {
-    Start-Process -WindowStyle Hidden powershell.exe -ArgumentList @(
-      '-NoProfile',
-      '-Command',
-      "try { Invoke-RestMethod -Method Post -Uri '$Url/warmup' -TimeoutSec 900 | Out-Null } catch { }"
-    ) | Out-Null
-  }
+  if (-not $health.loaded) { Start-Warmup }
   Write-Output $Url
   exit 0
 }
@@ -58,26 +60,22 @@ $args = @(
   '--log-level', 'warning'
 )
 
-Start-Process \
-  -FilePath $Python \
-  -ArgumentList $args \
-  -WorkingDirectory $Root \
-  -WindowStyle Hidden \
-  -RedirectStandardOutput $outLog \
-  -RedirectStandardError $errLog | Out-Null
+$startParams = @{
+  FilePath = $Python
+  ArgumentList = $args
+  WorkingDirectory = $Root
+  WindowStyle = 'Hidden'
+  RedirectStandardOutput = $outLog
+  RedirectStandardError = $errLog
+}
+Start-Process @startParams | Out-Null
 
 for ($i = 0; $i -lt 30; $i++) {
   Start-Sleep -Milliseconds 400
   $health = Test-ChatterboxHealth
   if ($health) {
     $env:SHINO_TTS_URL = $Url
-    if (-not $health.loaded) {
-      Start-Process -WindowStyle Hidden powershell.exe -ArgumentList @(
-        '-NoProfile',
-        '-Command',
-        "try { Invoke-RestMethod -Method Post -Uri '$Url/warmup' -TimeoutSec 900 | Out-Null } catch { }"
-      ) | Out-Null
-    }
+    if (-not $health.loaded) { Start-Warmup }
     Write-Output $Url
     exit 0
   }
