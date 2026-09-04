@@ -13,6 +13,11 @@
     try { window.Jarvis?.views?.dispatch(VIEW_ID, 'set_state', { state }); } catch (_) {}
   }
 
+  function safeCallback(callback, ...args) {
+    if (typeof callback !== 'function') return;
+    try { callback(...args); } catch (err) { console.warn('[SHINO-OS] stream callback failed', err); }
+  }
+
   function addStyles() {
     if (document.getElementById('sho-chat-bridge-css')) return;
     const style = document.createElement('style');
@@ -95,17 +100,26 @@
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        full += decoder.decode(value, { stream: true });
+        const delta = decoder.decode(value, { stream: true });
+        if (!delta) continue;
+        full += delta;
         target.body.textContent = full;
         log.scrollTop = log.scrollHeight;
+        safeCallback(options.onDelta, delta, full);
       }
-      full += decoder.decode();
+      const tail = decoder.decode();
+      if (tail) {
+        full += tail;
+        safeCallback(options.onDelta, tail, full);
+      }
       target.body.textContent = full;
       target.wrap.classList.remove('streaming');
+      safeCallback(options.onComplete, full.trim());
       return full.trim();
     } catch (err) {
       target.wrap.classList.remove('streaming');
       target.body.textContent = `Erreur de communication avec Jarvis (${err.message || err}).`;
+      safeCallback(options.onError, err);
       setCore('error');
       return '';
     } finally {
