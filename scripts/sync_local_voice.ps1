@@ -59,15 +59,37 @@ function Set-EnvValue([string]$Name, [string]$Value) {
   Set-Content -Path $EnvPath -Value $lines -Encoding UTF8
 }
 
-# SHINO voice path: browser mic -> Handy headless/Vulkan -> Ollama -> Piper.
-# handy.exe is auto-detected under %LOCALAPPDATA%\Handy unless SHINO_HANDY_EXE overrides it.
+# SHINO voice path: browser mic -> Handy/Vulkan -> Ollama -> Chatterbox V3 (optional) -> Piper fallback.
 # Handy --model expects the exact local registry id returned by --list-models --json.
 Set-EnvValue "SHINO_STT_BACKEND" "handy"
 Set-EnvValue "SHINO_HANDY_MODEL" "handy-computer/whisper-large-v3-turbo-gguf/whisper-large-v3-turbo-Q8_0.gguf"
 Set-EnvValue "SHINO_HANDY_DEVICE_INDEX" "0"
 Set-EnvValue "TTS_PROVIDER" "piper"
 
-Write-Host "[SHINO-OS] Voix locale synchronisee: Handy + Whisper Large V3 Turbo Q8_0 (device 0) + Ollama + Piper." -ForegroundColor Cyan
+$naturalTtsScript = Join-Path $Root "scripts\ensure_natural_tts.ps1"
+$naturalTtsUrl = ""
+if (Test-Path $naturalTtsScript) {
+  try {
+    $naturalTtsUrl = [string](& $naturalTtsScript -Root $Root -RuntimeRoot $RuntimeRoot | Select-Object -Last 1)
+    $naturalTtsUrl = $naturalTtsUrl.Trim()
+  } catch {
+    Write-Host "[SHINO-OS] Chatterbox indisponible: $($_.Exception.Message)" -ForegroundColor Yellow
+    $naturalTtsUrl = ""
+  }
+}
+
+if ($naturalTtsUrl) {
+  $env:SHINO_TTS_URL = $naturalTtsUrl
+  Set-EnvValue "SHINO_TTS_URL" $naturalTtsUrl
+  Set-EnvValue "SHINO_TTS_LANGUAGE" "fr"
+  Write-Host "[SHINO-OS] TTS naturel: Chatterbox Multilingual V3 resident ($naturalTtsUrl), Piper fallback." -ForegroundColor Cyan
+} else {
+  Remove-Item Env:SHINO_TTS_URL -ErrorAction SilentlyContinue
+  Set-EnvValue "SHINO_TTS_URL" ""
+  Write-Host "[SHINO-OS] TTS naturel non installe: Piper reste le fallback actif." -ForegroundColor Yellow
+}
+
+Write-Host "[SHINO-OS] Voix locale synchronisee: Handy + Whisper Large V3 Turbo Q8_0 (device 0) + Ollama + TTS." -ForegroundColor Cyan
 if ($env:SHINO_STT_URL) {
   Write-Host "[SHINO-OS] Noeud STT LAN configure: $env:SHINO_STT_URL" -ForegroundColor Cyan
 }
