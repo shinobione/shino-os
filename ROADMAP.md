@@ -16,10 +16,12 @@ Cette branche contient le code réel de V0.2. Pour éviter que deux énormes roa
 - TTS : Chatterbox Multilingual V3 installé avec `torch 2.6.0+cu124`, CUDA 12.4, RTX 3060 détectée, modèle préchargé
 - Streaming TTS par phrases : implémenté
 - Piper : fallback uniquement
-- Prochain gate : confirmer physiquement `CHATTERBOX V3 · STREAM`, puis barge-in
-- Vision : caméra/MediaPipe/gestes Jarvis toujours présents upstream, à réexposer dans le cockpit SHINO
+- **Root cause Piper trouvé le 04/09/2026 :** le launcher Jarvis upstream tue explicitement tout listener sur le port `8765` dans `Stop-JarvisRuntime`. SHINO lançait Chatterbox sur ce même port avant de lancer Jarvis ; Jarvis le tuait donc après un warmup réussi. Chatterbox SHINO a été déplacé sur le port dédié **`18765`** sans modifier l'upstream.
+- Test direct Chatterbox validé : CUDA + `reference.wav` + synthèse OK ; cold path ~49 s, synthèse chaude à mesurer après stabilisation.
+- Prochain gate : confirmer physiquement `CHATTERBOX V3 · STREAM` sur `18765`, puis barge-in
+- **Vision / CAM — P1 après voice gate :** réexposer la caméra Jarvis native dans le cockpit SHINO, réutiliser MediaPipe mains/visage/landmarks + Gesture Router + gestes existants (pointing, open palm, victory, thumbs, pinch volume, fists zoom/pan), puis YOLO objets. Ne pas réécrire MediaPipe depuis zéro.
 - Dernier bug prompt voix : regex `[voix]` trop fragile ; patch rendu résilient + smoke Windows ajouté
-- Interruption immédiate en cours : nettoyage ciblé du disque C: avant poursuite des tests voix
+- Nettoyage disque C: mis en pause ; ne pas mélanger ce chantier avec le gate voix.
 
 ## Runtime essentiel
 
@@ -36,8 +38,11 @@ C:\Users\jerry\AppData\Local\Handy\handy.exe
 Ollama:
 http://localhost:11434
 
-Chatterbox worker:
-http://127.0.0.1:8765
+Chatterbox worker SHINO:
+http://127.0.0.1:18765
+
+IMPORTANT:
+8765 = port nettoyé/réservé par le launcher Jarvis upstream ; ne plus l'utiliser pour un worker SHINO persistant.
 ```
 
 ### Ce qui doit tourner
@@ -46,8 +51,9 @@ http://127.0.0.1:8765
 - Ollama : oui actuellement
 - Handy GUI : **non**
 - Handy headless : lancé à la demande par SHINO
-- Chatterbox worker : lancé automatiquement par SHINO après `tts-setup`
-- Piper : aucun process manuel
+- Chatterbox worker : lancé automatiquement par SHINO, résident sur `127.0.0.1:18765`
+- Piper : aucun process manuel ; fallback seulement
+- LiveKit : lancé par Jarvis upstream mais non requis pour le chemin voix SHINO actuel
 
 ## Reprise
 
@@ -55,6 +61,14 @@ http://127.0.0.1:8765
 git pull
 .\shino.bat run
 ```
+
+Après `Jarvis pret`, le contrôle de survie Chatterbox est :
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:18765/health" | ConvertTo-Json -Depth 5
+```
+
+Le worker doit **toujours répondre après le démarrage complet de Jarvis**. Ensuite seulement faire le test micro et exiger `CHATTERBOX V3 · STREAM`.
 
 Avant de demander un test physique, vérifier la CI du **commit exact**.
 
@@ -64,7 +78,9 @@ Avant de demander un test physique, vérifier la CI du **commit exact**.
 - ne pas demander d'ouvrir Handy GUI ;
 - ne pas traiter le warning `ANTHROPIC_API_KEY` comme un bug du mode Ollama local ;
 - ne pas confondre l'erreur LiveKit upstream avec le chemin voix SHINO actuel ;
-- ne pas supprimer le runtime SHINO/Ollama/Handy/Chatterbox pendant le nettoyage disque ;
-- ne pas reconstruire le cockpit depuis zéro : il existe déjà dans cette branche.
+- **ne jamais remettre Chatterbox sur `8765` tant que le pin Jarvis courant contient `Stop-JarvisRuntime` avec `8765` dans sa liste de ports à tuer ;**
+- ne pas supprimer le runtime SHINO/Ollama/Handy/Chatterbox pendant un nettoyage disque ;
+- ne pas reconstruire le cockpit depuis zéro : il existe déjà dans cette branche ;
+- ne pas reconstruire la caméra/gestes depuis zéro : réutiliser le MediaPipe/Gesture Router upstream déjà présent.
 
-**Pour tout le reste — historique complet, décisions, architecture, paths, bugs résolus, roadmap priorisée, nettoyage disque en cours — lire la roadmap canonique sur `main`.**
+**Pour tout le reste — historique complet, décisions, architecture, paths, bugs résolus, roadmap priorisée — lire la roadmap canonique sur `main`.**
