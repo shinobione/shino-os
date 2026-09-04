@@ -131,42 +131,35 @@ function Set-JarvisPort {
   Set-Content -Path $envPath -Value $lines -Encoding UTF8
 }
 
-function Test-PortFree {
-  param([int]$Port)
-
-  $probe = $null
-  try {
-    $probe = New-Object -TypeName System.Net.Sockets.TcpListener -ArgumentList @([System.Net.IPAddress]::Loopback, $Port)
-    $probe.Start()
-    return $true
-  } catch {
-    return $false
-  } finally {
-    if ($null -ne $probe) {
-      try { $probe.Stop() } catch { }
+function Get-ShinoStableJarvisPort {
+  $port = 8000
+  if ($env:SHINO_JARVIS_PORT) {
+    $parsed = 0
+    if (-not [int]::TryParse($env:SHINO_JARVIS_PORT, [ref]$parsed)) {
+      throw "SHINO_JARVIS_PORT invalide: $($env:SHINO_JARVIS_PORT)"
     }
+    if ($parsed -lt 1 -or $parsed -gt 65535) {
+      throw "SHINO_JARVIS_PORT hors plage: $parsed"
+    }
+    $port = $parsed
   }
+  return $port
 }
 
-function Ensure-FreeJarvisPort {
+function Ensure-StableJarvisPort {
+  # IMPORTANT: ne pas sonder puis incrementer le port ici.
+  # Jarvis nettoie lui-meme ses anciens process/listeners au demarrage.
+  # L'ancien comportement SHINO incrementait le PORT avant ce nettoyage,
+  # laissait les instances precedentes vivantes et cassait les redirect URI OAuth.
+  $stablePort = Get-ShinoStableJarvisPort
   $configuredPort = Get-JarvisPort
-  if (Test-PortFree -Port $configuredPort) {
-    return $configuredPort
+  if ($configuredPort -ne $stablePort) {
+    Set-JarvisPort -Port $stablePort
+    Write-Shino "Port Jarvis repinne: $configuredPort -> $stablePort (URL/OAuth stable)."
+  } else {
+    Write-Shino "Port Jarvis fixe: $stablePort (URL/OAuth stable)."
   }
-
-  $candidate = $configuredPort + 1
-  $limit = [Math]::Min(65535, $configuredPort + 50)
-
-  while ($candidate -le $limit) {
-    if (Test-PortFree -Port $candidate) {
-      Set-JarvisPort -Port $candidate
-      Write-Shino "Port $configuredPort occupe; Jarvis bascule automatiquement sur $candidate."
-      return $candidate
-    }
-    $candidate++
-  }
-
-  throw "Aucun port libre trouve entre $($configuredPort + 1) et $limit."
+  return $stablePort
 }
 
 function Sync-ShinoInstalledViews {
@@ -226,7 +219,7 @@ function Invoke-Jarvis([string]$JarvisCommand) {
   }
 
   if ($JarvisCommand -in @("run", "api")) {
-    $activePort = Ensure-FreeJarvisPort
+    $activePort = Ensure-StableJarvisPort
     Write-Shino "Port Jarvis: $activePort"
   }
 
