@@ -29,10 +29,24 @@ $CanonicalOrigin = "http://localhost:$Port"
 
 if (-not (Test-Path $GoogleOAuthPath)) { exit 0 }
 
-# IMPORTANT: these are upstream runtime files, not SHINO source files. Previous
-# iterations patched them in-place and accumulated edits across runs, eventually
-# corrupting capabilities.js. Always restore the three files from the pinned
-# Jarvis HEAD first, then apply one deterministic SHINO patch from a clean base.
+function Replace-RegexOnce {
+  param(
+    [string]$Text,
+    [string]$Pattern,
+    [string]$Replacement,
+    [string]$Label
+  )
+  $rx = [regex]::new($Pattern, [System.Text.RegularExpressions.RegexOptions]::Multiline)
+  $matches = $rx.Matches($Text)
+  if ($matches.Count -ne 1) {
+    throw "$Label: attendu 1 bloc upstream, trouve $($matches.Count). Patch refuse pour ne pas corrompre Jarvis."
+  }
+  return $rx.Replace($Text, $Replacement, 1)
+}
+
+# These are upstream runtime files, not SHINO source files. Previous iterations
+# patched them in-place and accumulated edits across runs. Always reset this tiny
+# surface from the pinned Jarvis HEAD, then apply one deterministic patch.
 if (Test-Path (Join-Path $JarvisDir ".git")) {
   foreach ($rel in @($GoogleOAuthRel, $CapabilitiesRel, $CapabilitiesHtmlRel)) {
     & git -C $JarvisDir checkout -- $rel 2>$null
@@ -44,7 +58,7 @@ if (Test-Path (Join-Path $JarvisDir ".git")) {
 }
 
 # -----------------------------------------------------------------------------
-# 1) Backend: one canonical localhost callback + reject obviously corrupted keys.
+# 1) Backend: one canonical callback + reject masked/corrupted credentials.
 # -----------------------------------------------------------------------------
 $oauth = Get-Content $GoogleOAuthPath -Raw -Encoding UTF8
 
@@ -55,7 +69,6 @@ def _redirect_uri(request: Request, service: str) -> str:
         base = base.replace("http://", "https://", 1)
     return f"{base}/api/google/callback/{service}"
 '@
-
 $newRedirect = @'
 def _redirect_uri(request: Request, service: str) -> str:
     if os.getenv("SHINO_OS") == "1":
@@ -66,9 +79,8 @@ def _redirect_uri(request: Request, service: str) -> str:
     return f"{base}/api/google/callback/{service}"
 '@
 $newRedirect = $newRedirect.Replace("__ORIGIN__", $CanonicalOrigin)
-
 if (-not $oauth.Contains($oldRedirect)) {
-  throw "Bloc _redirect_uri Google OAuth upstream inattendu; patch SHINO refuse plutot que de corrompre le runtime."
+  throw "Bloc _redirect_uri Google OAuth upstream inattendu; patch SHINO refuse."
 }
 $oauth = $oauth.Replace($oldRedirect, $newRedirect)
 
@@ -78,14 +90,12 @@ $oldServiceGuard = @'
 
     # Si les credentials sont fournis en .env (UI), (re)génère le fichier JSON
 '@
-
 $newServiceGuard = @'
     if service not in ("gmail", "calendar"):
         return RedirectResponse("/capabilities?error=unknown_service")
 
-    # The Capabilities API masks secrets. Older SHINO builds accidentally wrote
-    # those masked placeholders back into .env. Refuse to send an invalid client
-    # to Google; the UI will ask for the real Client ID / Secret again instead.
+    # Older SHINO builds accidentally wrote masked placeholders from /api/settings
+    # back into .env. Do not send such a fake client to Google.
     if os.getenv("SHINO_OS") == "1":
         client_id = (settings.google_client_id or "").strip()
         client_secret = settings.google_client_secret.get_secret_value().strip()
@@ -101,31 +111,26 @@ $newServiceGuard = @'
 
     # Si les credentials sont fournis en .env (UI), (re)génère le fichier JSON
 '@
-
 if (-not $oauth.Contains($oldServiceGuard)) {
-  throw "Bloc google_auth upstream inattendu; patch SHINO refuse plutot que de corrompre le runtime."
+  throw "Bloc google_auth upstream inattendu; patch SHINO refuse."
 }
 $oauth = $oauth.Replace($oldServiceGuard, $newServiceGuard)
 Set-Content -Path $GoogleOAuthPath -Value $oauth -Encoding UTF8
 
 # -----------------------------------------------------------------------------
-# 2) Capabilities: deterministic edits only. No broad regex over JS blocks.
+# 2) Capabilities: tiny, count-checked edits only.
 # -----------------------------------------------------------------------------
 $ui = Get-Content $CapabilitiesPath -Raw -Encoding UTF8
-
-# Stable setup hint.
 $ui = $ui.Replace(
   'http://127.0.0.1:8000/api/google/callback/gmail + .../calendar',
   ($CanonicalOrigin + '/api/google/callback/gmail + .../calendar')
 )
 
-# Never pre-fill editable fields with masked values returned by /api/settings.
-# This was the root cause of invalid_client after a second Save click.
-$oldMaskedPrefill = @'
-            const v = (ss.api_keys || {})[f.key] || "";
-            if (v) inp.value = v;
-'@
-$newMaskedPrefill = @'
+# Root cause of invalid_client: the upstream endpoint returns API values masked,
+# but Capabilities put those masks back into editable inputs. A later Save wrote
+# the mask to .env. Keep the fields empty and only indicate that a value exists.
+$maskedPattern = '(?m)^[ \t]*const v = \(ss\.api_keys \|\| \{\}\)\[f\.key\] \|\| "";\r?\n[ \t]*if \(v\) inp\.value = v;[ \t]*$'
+$maskedReplacement = @'
             const configured = Boolean((ss.api_keys || {})[f.key]);
             if (configured) {
               inp.dataset.configured = "1";
@@ -133,13 +138,9 @@ $newMaskedPrefill = @'
                 ? "Déjà configuré — saisir une nouvelle valeur pour remplacer"
                 : "Déjà configuré — laisser vide pour conserver";
             }
-'@
-if (-not $ui.Contains($oldMaskedPrefill)) {
-  throw "Bloc de pre-remplissage credentials upstream inattendu; patch SHINO refuse."
-}
-$ui = $ui.Replace($oldMaskedPrefill, $newMaskedPrefill)
+'@.TrimEnd()
+$ui = Replace-RegexOnce -Text $ui -Pattern $maskedPattern -Replacement $maskedReplacement -Label "Credentials masques"
 
-# OAuth-only connectors must also escape the persistent Jarvis iframe.
 $oldPlainOAuth = @'
     if (cfg.kind === "oauth") {
       window.location.href = cfg.url;
@@ -158,9 +159,9 @@ if (-not $ui.Contains($oldPlainOAuth)) {
 }
 $ui = $ui.Replace($oldPlainOAuth, $newPlainOAuth)
 
-# Hybrid OAuth connector (Gmail/Calendar): same browser tab, never iframe/popup.
-$oldConnect = '        connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });'
-$newConnect = @'
+# Gmail/Calendar/other hybrid OAuth: same browser tab, never iframe and never popup.
+$connectPattern = '(?m)^[ \t]*connectBtn\.addEventListener\("click", \(\) => \{ window\.location\.href = cfg\.url; \}\);[ \t]*$'
+$connectReplacement = @'
         connectBtn.addEventListener("click", () => {
           if (connectBtn.disabled) return;
           connectBtn.disabled = true;
@@ -169,18 +170,11 @@ $newConnect = @'
           target.location.href = cfg.url;
         });
 '@.TrimEnd()
-if (-not $ui.Contains($oldConnect)) {
-  throw "Handler OAuth hybride upstream inattendu; patch SHINO refuse."
-}
-$ui = $ui.Replace($oldConnect, $newConnect)
+$ui = Replace-RegexOnce -Text $ui -Pattern $connectPattern -Replacement $connectReplacement -Label "Handler OAuth hybride"
 
-# Friendly error when the old masked-value bug has already damaged .env.
-$oldInit = @'
-  J.mountAtmosphere();
-
-  J.mountRooms({
-'@
-$newInit = @'
+# Friendly message if the old masked-value bug already damaged .env.
+$initPattern = '(?m)^  J\.mountAtmosphere\(\);[ \t]*$'
+$initReplacement = @'
   J.mountAtmosphere();
 
   const shinoParams = new URLSearchParams(window.location.search);
@@ -190,25 +184,20 @@ $newInit = @'
       text: "Google OAuth : les identifiants enregistrés sont invalides. Recopie une fois le vrai Client ID et le vrai Client Secret, puis Sauvegarder.",
     }), 150);
   }
-
-  J.mountRooms({
-'@
-if (-not $ui.Contains($oldInit)) {
-  throw "Bloc INIT capabilities upstream inattendu; patch SHINO refuse."
-}
-$ui = $ui.Replace($oldInit, $newInit)
+'@.TrimEnd()
+$ui = Replace-RegexOnce -Text $ui -Pattern $initPattern -Replacement $initReplacement -Label "INIT Capabilities"
 Set-Content -Path $CapabilitiesPath -Value $ui -Encoding UTF8
 
 # -----------------------------------------------------------------------------
-# 3) Cache bust the now-clean capabilities JS.
+# 3) Cache-bust only this repaired page.
 # -----------------------------------------------------------------------------
 $html = Get-Content $CapabilitiesHtmlPath -Raw -Encoding UTF8
 $oldScript = '<script src="/capabilities.js"></script>'
-$newScript = '<script src="/capabilities.js?v=shino-oauth-clean-1"></script>'
+$newScript = '<script src="/capabilities.js?v=shino-oauth-clean-2"></script>'
 if (-not $html.Contains($oldScript)) {
   throw "Script capabilities.html upstream inattendu; patch SHINO refuse."
 }
 $html = $html.Replace($oldScript, $newScript)
 Set-Content -Path $CapabilitiesHtmlPath -Value $html -Encoding UTF8
 
-Write-Host "[SHINO-OS] Google OAuth propre: callback $CanonicalOrigin, meme onglet, credentials masques non reecrits." -ForegroundColor Cyan
+Write-Host "[SHINO-OS] Google OAuth propre: Capabilities restaure, meme onglet, credentials masques proteges." -ForegroundColor Cyan
