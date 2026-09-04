@@ -21,25 +21,42 @@ $Url = "http://127.0.0.1:$Port"
 
 function Test-ChatterboxHealth {
   try {
-    return Invoke-RestMethod -Uri "$Url/health" -Method Get -TimeoutSec 1
+    return Invoke-RestMethod -Uri "$Url/health" -Method Get -TimeoutSec 2
   } catch {
     return $null
   }
 }
 
-function Start-Warmup {
-  Start-Process -WindowStyle Hidden powershell.exe -ArgumentList @(
-    '-NoProfile',
-    '-Command',
-    "try { Invoke-RestMethod -Method Post -Uri '$Url/warmup' -TimeoutSec 900 | Out-Null } catch { }"
-  ) | Out-Null
+function Invoke-ChatterboxWarmup {
+  try {
+    Write-Host "[SHINO-OS] Chatterbox warmup: modele + voix de reference..." -ForegroundColor Cyan
+    $warm = Invoke-RestMethod -Method Post -Uri "$Url/warmup" -TimeoutSec 180
+    if (-not $warm.ok) { return $false }
+    $ref = if ($warm.conditioned_reference) { " + reference" } else { "" }
+    Write-Host "[SHINO-OS] Chatterbox READY sur $($warm.device)$ref ($([math]::Round([double]$warm.load_ms/1000,1)) s)." -ForegroundColor Cyan
+    return $true
+  } catch {
+    Write-Host "[SHINO-OS] Chatterbox warmup echec: $($_.Exception.Message)" -ForegroundColor Yellow
+    return $false
+  }
 }
 
 $health = Test-ChatterboxHealth
 if ($health) {
-  $env:SHINO_TTS_URL = $Url
-  if (-not $health.loaded) { Start-Warmup }
-  Write-Output $Url
+  if ($health.ready) {
+    $env:SHINO_TTS_URL = $Url
+    Write-Output $Url
+    exit 0
+  }
+  if (Invoke-ChatterboxWarmup) {
+    $health = Test-ChatterboxHealth
+    if ($health -and $health.ready) {
+      $env:SHINO_TTS_URL = $Url
+      Write-Output $Url
+      exit 0
+    }
+  }
+  Write-Output ""
   exit 0
 }
 
@@ -70,15 +87,29 @@ $startParams = @{
 }
 Start-Process @startParams | Out-Null
 
-for ($i = 0; $i -lt 30; $i++) {
+$health = $null
+for ($i = 0; $i -lt 40; $i++) {
   Start-Sleep -Milliseconds 400
   $health = Test-ChatterboxHealth
-  if ($health) {
-    $env:SHINO_TTS_URL = $Url
-    if (-not $health.loaded) { Start-Warmup }
-    Write-Output $Url
-    exit 0
-  }
+  if ($health) { break }
+}
+
+if (-not $health) {
+  Write-Host "[SHINO-OS] Worker Chatterbox non joignable apres demarrage." -ForegroundColor Yellow
+  Write-Output ""
+  exit 0
+}
+
+if (-not (Invoke-ChatterboxWarmup)) {
+  Write-Output ""
+  exit 0
+}
+
+$health = Test-ChatterboxHealth
+if ($health -and $health.ready) {
+  $env:SHINO_TTS_URL = $Url
+  Write-Output $Url
+  exit 0
 }
 
 Write-Output ""
