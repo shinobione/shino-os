@@ -77,26 +77,44 @@ jobs:
           $env:SHINO_RUNTIME_ROOT = Join-Path $env:RUNNER_TEMP 'shino-voice-runtime'
           $jarvis = Join-Path $env:SHINO_RUNTIME_ROOT 'jarvis-OS'
           $api = Join-Path $jarvis 'src\jarvis\interfaces\api'
+          $prompts = Join-Path $jarvis 'prompts'
           New-Item -ItemType Directory -Force -Path $api | Out-Null
+          New-Item -ItemType Directory -Force -Path $prompts | Out-Null
           $appFixture = @'
           from fastapi import FastAPI
           app = FastAPI()
           # ── [SURFACE] ───────────────────────────────────────────────
           '@
+          $promptFixture = @'
+          # Jarvis prompt fixture
+
+          ## Tag [voix]
+          OLD VOICE RULES
+
+          ## Upstream section renamed later
+          KEEP THIS SECTION
+          '@
           Set-Content -Path (Join-Path $jarvis 'src\jarvis\app.py') -Value $appFixture -Encoding UTF8
           Set-Content -Path (Join-Path $jarvis '.env') -Value @('STT_PROVIDER=deepgram','WHISPER_MODEL=tiny','TTS_PROVIDER=elevenlabs') -Encoding UTF8
+          Set-Content -Path (Join-Path $prompts 'system_static.md') -Value $promptFixture -Encoding UTF8
           .\scripts\sync_local_voice.ps1
           .\scripts\sync_local_voice.ps1
           $app = Get-Content (Join-Path $jarvis 'src\jarvis\app.py') -Raw
           $count = ([regex]::Matches($app, 'SHINO_LOCAL_VOICE_BEGIN')).Count
           if ($count -ne 1) { throw "local voice router marker expected once, got $count" }
           if (-not (Test-Path (Join-Path $api 'shino_local_voice.py'))) { throw 'local voice router not copied' }
+          $promptText = Get-Content (Join-Path $prompts 'system_static.md') -Raw
+          if ($promptText -notmatch 'Parle en francais oral naturel') { throw 'SHINO voice rules were not injected' }
+          if ($promptText -match 'OLD VOICE RULES') { throw 'old upstream voice section still present' }
+          if ($promptText -notmatch 'KEEP THIS SECTION') { throw 'next upstream H2 section was damaged' }
+          $voiceCount = ([regex]::Matches($promptText, '## Tag \[voix\]')).Count
+          if ($voiceCount -ne 1) { throw "voice prompt section expected once, got $voiceCount" }
           $envText = Get-Content (Join-Path $jarvis '.env') -Raw
           if ($envText -notmatch 'SHINO_STT_BACKEND=handy') { throw 'SHINO_STT_BACKEND not set to handy' }
           if ($envText -notmatch 'SHINO_HANDY_MODEL=handy-computer/whisper-large-v3-turbo-gguf/whisper-large-v3-turbo-Q8_0.gguf') { throw 'Exact Handy Turbo model id not configured' }
           if ($envText -notmatch 'SHINO_HANDY_DEVICE_INDEX=0') { throw 'Handy device index not configured' }
           if ($envText -notmatch 'TTS_PROVIDER=piper') { throw 'Piper fallback not configured' }
-          Write-Host 'local voice runtime sync: OK'
+          Write-Host 'local voice runtime sync + prompt patch: OK'
       - name: Smoke status on detached HEAD runtime
         shell: powershell
         run: |
