@@ -3,7 +3,18 @@
 
   const VIEW_ID = 'shino-command-center';
   const MAX_ATTEMPTS = 100;
+  const VISION_LOADER_ID = 'shino-vision-loader';
   let attempts = 0;
+
+  function ensureVisionBridge() {
+    if (window.__SHINO_VISION_BRIDGE__ || document.getElementById(VISION_LOADER_ID)) return;
+    const script = document.createElement('script');
+    script.id = VISION_LOADER_ID;
+    script.src = `/static/skills/${VIEW_ID}/zzzzzz-vision.js`;
+    script.defer = true;
+    script.addEventListener('error', () => console.error('[SHINO-OS] Vision bridge failed to load.'));
+    document.head.appendChild(script);
+  }
 
   function mountHome() {
     attempts += 1;
@@ -31,6 +42,7 @@
 
   function start() {
     if (location.pathname !== '/' && !location.pathname.endsWith('/home.html')) return;
+    ensureVisionBridge();
     window.setTimeout(mountHome, 0);
   }
 
