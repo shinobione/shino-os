@@ -17,6 +17,14 @@
     let text = String(value || '').replace(/\r\n?/g, '\n');
     if (!text.trim()) return '';
 
+    // Technical routing/UI annotations are useful on screen but must never be spoken.
+    // Examples seen in physical tests: [visuel], [son], [tool], [I], [CF], [BG:PROJECT].
+    text = text
+      .replace(/^\s*\[(?:visuel|visual|son|sound|audio|tool|outil)\]\s*:?\s*/gim, '')
+      .replace(/^\s*\[(?:I|CF|BG(?::[A-Z0-9_-]+)?)\]\s*/gim, '')
+      .replace(/\[(?:visuel|visual|son|sound|audio|tool|outil)\]\s*/gi, '')
+      .replace(/\[(?:I|CF|BG(?::[A-Z0-9_-]+)?)\]\s*/g, '');
+
     // Code is useful on screen but should not be read symbol by symbol.
     let hadCodeBlock = false;
     text = text.replace(/```[\s\S]*?```/g, () => {
@@ -42,14 +50,16 @@
       .replace(/[\*_]/g, '')
       .replace(/\|/g, ', ');
 
-    // Piper/eSpeak can literally verbalise emoji Unicode names. Never send them.
+    // Piper/eSpeak and some neural TTS engines can verbalise emoji Unicode names.
     text = stripEmoji(text);
 
     // Remove common text emoticons as well.
     text = text.replace(/(^|\s)(?:[:;=8][\-^']?[)(/DPp]|[)(/D][\-^']?[:;=8])(?=\s|$)/g, '$1');
 
     // Voice answers often start with model-chat filler that sounds artificial.
-    text = text.replace(/^\s*(?:(?:euh+|heu+|hmm+|hum+)[,.!…\s-]*)+/i, '');
+    text = text
+      .replace(/^\s*(?:(?:euh+|heu+|hmm+|hum+)[,.!…\s-]*)+/i, '')
+      .replace(/^\s*(?:bien sûr|bien sur|absolument|excellente question|bonne question)[,.!…\s-]*/i, '');
 
     // Preserve paragraphs as natural sentence pauses instead of reading layout.
     const lines = text
