@@ -53,8 +53,8 @@ function Replace-TrimmedLineOnce {
   return @($result)
 }
 
-# Runtime files are restored from the pinned Jarvis HEAD on every launch. This
-# repairs the Capabilities page even if an older SHINO patch corrupted it.
+# These files belong to the pinned Jarvis runtime. Restore them before every SHINO
+# patch so a previous failed/old overlay can never accumulate in Capabilities.
 if (Test-Path (Join-Path $JarvisDir ".git")) {
   foreach ($rel in @($GoogleOAuthRel, $CapabilitiesRel, $CapabilitiesHtmlRel)) {
     & git -C $JarvisDir checkout -- $rel 2>$null
@@ -66,71 +66,48 @@ if (Test-Path (Join-Path $JarvisDir ".git")) {
 }
 
 # -----------------------------------------------------------------------------
-# Backend: stable callback + refuse masked/corrupted credentials.
+# Backend: line-based edits only. This deliberately avoids multiline .Contains()
+# matches, which are fragile on Windows because runtime files may use CRLF.
 # -----------------------------------------------------------------------------
-$oauth = Get-Content $GoogleOAuthPath -Raw -Encoding UTF8
+$oauthLines = @(Get-Content $GoogleOAuthPath -Encoding UTF8)
 
-$oldRedirect = @'
-def _redirect_uri(request: Request, service: str) -> str:
-    base = str(request.base_url).rstrip("/")
-    if not base.startswith("https://") and "127.0.0.1" not in base and "localhost" not in base:
-        base = base.replace("http://", "https://", 1)
-    return f"{base}/api/google/callback/{service}"
-'@
-$newRedirect = @'
-def _redirect_uri(request: Request, service: str) -> str:
-    if os.getenv("SHINO_OS") == "1":
-        return f"__ORIGIN__/api/google/callback/{service}"
-    base = str(request.base_url).rstrip("/")
-    if not base.startswith("https://") and "127.0.0.1" not in base and "localhost" not in base:
-        base = base.replace("http://", "https://", 1)
-    return f"{base}/api/google/callback/{service}"
-'@
-$newRedirect = $newRedirect.Replace("__ORIGIN__", $CanonicalOrigin)
-if (-not $oauth.Contains($oldRedirect)) {
-  throw "Bloc _redirect_uri Google OAuth upstream inattendu; patch SHINO refuse."
-}
-$oauth = $oauth.Replace($oldRedirect, $newRedirect)
+# SHINO owns one stable localhost origin. Replace the single return line rather
+# than rewriting the whole function, so upstream comments/newlines cannot break us.
+$oauthLines = Replace-TrimmedLineOnce -Lines $oauthLines `
+  -Needle 'return f"{base}/api/google/callback/{service}"' `
+  -Replacement @('    return f"' + $CanonicalOrigin + '/api/google/callback/{service}"') `
+  -Label "Callback Google OAuth"
 
-$oldServiceGuard = @'
-    if service not in ("gmail", "calendar"):
-        return RedirectResponse("/capabilities?error=unknown_service")
+# Validate the real credentials immediately before Jarvis regenerates its JSON.
+# Older SHINO builds could save masked placeholders returned by /api/settings.
+$oauthLines = Replace-TrimmedLineOnce -Lines $oauthLines `
+  -Needle '_maybe_write_credentials_from_env(request)' `
+  -Replacement @(
+    '    if os.getenv("SHINO_OS") == "1":',
+    '        client_id = (settings.google_client_id or "").strip()',
+    '        client_secret = settings.google_client_secret.get_secret_value().strip()',
+    '        masked = any(ch in client_id or ch in client_secret for ch in ("•", "*"))',
+    '        if (',
+    '            not client_id',
+    '            or not client_secret',
+    '            or masked',
+    '            or not client_id.endswith(".apps.googleusercontent.com")',
+    '        ):',
+    '            logger.error("SHINO Google OAuth credentials invalid or masked")',
+    '            return RedirectResponse("/capabilities?google_error=invalid_client_config")',
+    '',
+    '    _maybe_write_credentials_from_env(request)'
+  ) `
+  -Label "Validation credentials Google"
 
-    # Si les credentials sont fournis en .env (UI), (re)génère le fichier JSON
-'@
-$newServiceGuard = @'
-    if service not in ("gmail", "calendar"):
-        return RedirectResponse("/capabilities?error=unknown_service")
-
-    # Older SHINO builds accidentally wrote masked placeholders from /api/settings
-    # back into .env. Do not send such a fake client to Google.
-    if os.getenv("SHINO_OS") == "1":
-        client_id = (settings.google_client_id or "").strip()
-        client_secret = settings.google_client_secret.get_secret_value().strip()
-        masked = any(ch in client_id or ch in client_secret for ch in ("•", "*"))
-        if (
-            not client_id
-            or not client_secret
-            or masked
-            or not client_id.endswith(".apps.googleusercontent.com")
-        ):
-            logger.error("SHINO Google OAuth credentials invalid or masked")
-            return RedirectResponse("/capabilities?google_error=invalid_client_config")
-
-    # Si les credentials sont fournis en .env (UI), (re)génère le fichier JSON
-'@
-if (-not $oauth.Contains($oldServiceGuard)) {
-  throw "Bloc google_auth upstream inattendu; patch SHINO refuse."
-}
-$oauth = $oauth.Replace($oldServiceGuard, $newServiceGuard)
-Set-Content -Path $GoogleOAuthPath -Value $oauth -Encoding UTF8
+Set-Content -Path $GoogleOAuthPath -Value ($oauthLines -join [Environment]::NewLine) -Encoding UTF8
 
 # -----------------------------------------------------------------------------
-# Capabilities: edit known lines only, never a broad JS regex.
+# Capabilities: edit exact known lines only. Never regex across JS blocks.
 # -----------------------------------------------------------------------------
 $uiLines = @(Get-Content $CapabilitiesPath -Encoding UTF8)
 
-# Never put masked API values back into editable inputs. This caused invalid_client.
+# Never put masked API values back into editable inputs.
 $uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'const v = (ss.api_keys || {})[f.key] || "";' -Replacement @(
   '            const configured = Boolean((ss.api_keys || {})[f.key]);',
   '            if (configured) {',
@@ -142,7 +119,7 @@ $uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'const v = (ss.api_ke
 ) -Label "Credentials masques"
 $uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'if (v) inp.value = v;' -Replacement @() -Label "Ancien pre-remplissage masque"
 
-# OAuth must leave Jarvis' iframe but must stay in the SAME browser tab.
+# OAuth must leave Jarvis' persistent iframe but remain in the SAME browser tab.
 $uiLines = Replace-TrimmedLineOnce -Lines $uiLines -Needle 'window.location.href = cfg.url;' -Replacement @(
   '      const target = window.top || window;',
   '      target.location.href = cfg.url;'
@@ -177,14 +154,12 @@ $uiText = $uiText.Replace(
 )
 Set-Content -Path $CapabilitiesPath -Value $uiText -Encoding UTF8
 
-# Cache-bust the repaired page so Chrome cannot reuse the broken JS.
-$html = Get-Content $CapabilitiesHtmlPath -Raw -Encoding UTF8
-$oldScript = '<script src="/capabilities.js"></script>'
-$newScript = '<script src="/capabilities.js?v=shino-oauth-clean-3"></script>'
-if (-not $html.Contains($oldScript)) {
-  throw "Script capabilities.html upstream inattendu; patch SHINO refuse."
-}
-$html = $html.Replace($oldScript, $newScript)
-Set-Content -Path $CapabilitiesHtmlPath -Value $html -Encoding UTF8
+# Cache-bust repaired Capabilities JS so Chrome cannot reuse an older broken copy.
+$htmlLines = @(Get-Content $CapabilitiesHtmlPath -Encoding UTF8)
+$htmlLines = Replace-TrimmedLineOnce -Lines $htmlLines `
+  -Needle '<script src="/capabilities.js"></script>' `
+  -Replacement @('<script src="/capabilities.js?v=shino-oauth-clean-4"></script>') `
+  -Label "Script Capabilities"
+Set-Content -Path $CapabilitiesHtmlPath -Value ($htmlLines -join [Environment]::NewLine) -Encoding UTF8
 
 Write-Host "[SHINO-OS] Google OAuth propre: Capabilities restaure, meme onglet, credentials masques proteges." -ForegroundColor Cyan
