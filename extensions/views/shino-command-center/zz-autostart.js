@@ -5,6 +5,7 @@
   const MAX_ATTEMPTS = 100;
   const VISION_LOADER_ID = 'shino-vision-loader';
   const GESTURE_LOADER_ID = 'shino-gesture-loader';
+  const CONTROL_LOADER_ID = 'shino-control-loader';
   let attempts = 0;
 
   function ensureScript(id, src, readyFlag, label) {
@@ -29,6 +30,12 @@
       `/static/skills/${VIEW_ID}/zzzzzzz-gestures.js`,
       '__SHINO_GESTURE_BRIDGE__',
       'Gesture bridge'
+    );
+    ensureScript(
+      CONTROL_LOADER_ID,
+      `/static/skills/${VIEW_ID}/zzzzzzzz-controls.js`,
+      '__SHINO_CONTROL_BRIDGE__',
+      'Control bridge'
     );
   }
 
