@@ -86,7 +86,7 @@ jobs:
           if (-not (Test-Path (Join-Path $api 'shino_local_voice.py'))) { throw 'local voice router not copied' }
           $envText = Get-Content (Join-Path $jarvis '.env') -Raw
           if ($envText -notmatch 'SHINO_STT_BACKEND=handy') { throw 'SHINO_STT_BACKEND not set to handy' }
-          if ($envText -notmatch 'SHINO_HANDY_MODEL=handy-computer/whisper-large-v3-turbo-gguf') { throw 'Handy model not configured' }
+          if ($envText -notmatch 'SHINO_HANDY_MODEL=whisper-large-v3-turbo') { throw 'Handy model slug not configured' }
           if ($envText -notmatch 'SHINO_HANDY_DEVICE_INDEX=0') { throw 'Handy device index not configured' }
           if ($envText -notmatch 'TTS_PROVIDER=piper') { throw 'TTS_PROVIDER not set to piper' }
           Write-Host 'local Handy voice runtime sync: OK'
