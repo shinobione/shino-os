@@ -4,10 +4,13 @@
   const VIEW_ID = 'shino-command-center';
   const ROOT_ID = `${VIEW_ID}-container`;
   const TARGET_RATE = 16000;
-  const SILENCE_MS = 1050;
+  const SILENCE_MS = 700;
   const MAX_RECORD_MS = 20000;
   const RMS_GATE = 0.014;
   const STT_TIMEOUT_MS = 60000;
+  const FIRST_SPEECH_TRIGGER = 100;
+  const FIRST_SPEECH_MIN = 48;
+  const LONG_SPEECH_TRIGGER = 220;
   const ORB_STATE = {
     idle: 'idle', listening: 'listening', thinking: 'thinking', speaking: 'speaking', error: 'offline',
   };
@@ -274,7 +277,20 @@
     }
   }
 
-  function extractReadySpeech(buffer, flush = false) {
+  function naturalCut(text, limit, minimum) {
+    const windowText = String(text || '').slice(0, Math.min(limit, text.length));
+    let cut = Math.max(
+      windowText.lastIndexOf(', '),
+      windowText.lastIndexOf('; '),
+      windowText.lastIndexOf(': '),
+      windowText.lastIndexOf(' — '),
+      windowText.lastIndexOf(' - '),
+    );
+    if (cut < minimum) cut = windowText.lastIndexOf(' ');
+    return cut >= minimum ? cut : -1;
+  }
+
+  function extractReadySpeech(buffer, flush = false, lowLatency = false) {
     let rest = String(buffer || '');
     const segments = [];
 
@@ -286,11 +302,19 @@
       rest = rest.slice(match[0].length).trimStart();
     }
 
-    if (!flush && rest.length > 280) {
-      const windowText = rest.slice(0, 260);
+    if (!flush && lowLatency && segments.length === 0 && rest.length >= FIRST_SPEECH_TRIGGER) {
+      const cut = naturalCut(rest, FIRST_SPEECH_TRIGGER, FIRST_SPEECH_MIN);
+      if (cut >= FIRST_SPEECH_MIN) {
+        segments.push(rest.slice(0, cut + 1).trim());
+        rest = rest.slice(cut + 1).trimStart();
+      }
+    }
+
+    if (!flush && rest.length > LONG_SPEECH_TRIGGER) {
+      const windowText = rest.slice(0, 200);
       let cut = Math.max(windowText.lastIndexOf('; '), windowText.lastIndexOf(': '), windowText.lastIndexOf(', '));
-      if (cut < 120) cut = windowText.lastIndexOf(' ');
-      if (cut > 100) {
+      if (cut < 90) cut = windowText.lastIndexOf(' ');
+      if (cut > 80) {
         segments.push(rest.slice(0, cut + 1).trim());
         rest = rest.slice(cut + 1).trimStart();
       }
@@ -304,24 +328,38 @@
     return { segments, rest };
   }
 
-  function createSpeechStreamer() {
+  function createSpeechStreamer(turnStartedAt) {
     let pendingText = '';
-    let chain = Promise.resolve();
+    let synthChain = Promise.resolve();
+    let playChain = Promise.resolve();
     let spokenSegments = 0;
+    let firstSegmentQueued = false;
+    let firstAudioLogged = false;
     let lastEngine = 'piper';
 
     function enqueue(rawSegment) {
       const spoken = normalizeSpeech(rawSegment);
       if (!spoken || spoken.length < 2) return;
+      firstSegmentQueued = true;
 
-      chain = chain.then(async () => {
+      const audioPromise = synthChain = synthChain.then(async () => {
         setUi('SPEAKING…', ttsLabel(lastEngine), true);
         setCore('speaking');
         const audio = await synthesize(spoken);
         lastEngine = audio.engine || lastEngine;
-        setUi('SPEAKING…', `${ttsLabel(lastEngine)} · STREAM`, true);
         if (audio.durationMs > 0) {
           console.info(`[SHINO-OS] TTS ${ttsLabel(lastEngine)} ${Math.round(audio.durationMs)}ms · ${spoken.length} chars`);
+        }
+        return audio;
+      });
+
+      playChain = playChain.then(async () => {
+        const audio = await audioPromise;
+        setUi('SPEAKING…', `${ttsLabel(audio.engine || lastEngine)} · STREAM`, true);
+        setCore('speaking');
+        if (!firstAudioLogged) {
+          firstAudioLogged = true;
+          console.info(`[SHINO-OS] Voice first audio ${Math.round(performance.now() - turnStartedAt)}ms after capture close`);
         }
         await playAudio(audio.bytes);
         spokenSegments += 1;
@@ -331,15 +369,15 @@
     return {
       push(delta) {
         pendingText += String(delta || '');
-        const ready = extractReadySpeech(pendingText, false);
+        const ready = extractReadySpeech(pendingText, false, !firstSegmentQueued);
         pendingText = ready.rest;
         ready.segments.forEach(enqueue);
       },
       async finish() {
-        const ready = extractReadySpeech(pendingText, true);
+        const ready = extractReadySpeech(pendingText, true, false);
         pendingText = ready.rest;
         ready.segments.forEach(enqueue);
-        await chain;
+        await playChain;
         return { engine: lastEngine, segments: spokenSegments };
       },
     };
@@ -351,6 +389,7 @@
     const recorded = flatten();
     const recordedRate = sourceRate;
     await closeCapture();
+    const turnStartedAt = performance.now();
 
     try {
       if (recorded.length < recordedRate * 0.2) {
@@ -387,7 +426,7 @@
       if (loadMs > 0) console.info(`[SHINO-OS] Handy load ${Math.round(loadMs)}ms, infer ${Math.round(inferMs)}ms`);
       if (!window.SHINOChat?.sendText) throw new Error('chat bridge unavailable');
 
-      const speech = createSpeechStreamer();
+      const speech = createSpeechStreamer(turnStartedAt);
       const answer = await window.SHINOChat.sendText(text, {
         deferIdle: true,
         noFocus: true,
