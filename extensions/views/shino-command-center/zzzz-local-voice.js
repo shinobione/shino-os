@@ -206,7 +206,20 @@
         body: bytes,
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`STT HTTP ${response.status}`);
+      if (!response.ok) {
+        let detail = '';
+        try {
+          const payload = await response.json();
+          detail = String(payload?.detail || payload?.error || payload?.message || '').trim();
+        } catch (_) {}
+        if (!detail) {
+          try {
+            const status = await fetchStatus();
+            detail = String(status?.stt_last_error || '').trim();
+          } catch (_) {}
+        }
+        throw new Error(detail ? `STT ${response.status}: ${detail}` : `STT HTTP ${response.status}`);
+      }
       return response.json();
     } catch (err) {
       if (err?.name === 'AbortError') throw new Error('Handy timeout après 60 s');
