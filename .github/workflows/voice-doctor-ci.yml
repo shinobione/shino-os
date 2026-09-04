@@ -1,0 +1,27 @@
+name: SHINO Voice Doctor CI
+
+on:
+  push:
+    branches: [integration/jarvis-upstream]
+  pull_request:
+    branches: [main]
+
+jobs:
+  voice-doctor-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse voice doctor PowerShell
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path '.\scripts\voice_doctor.ps1'), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
+          Write-Host 'voice_doctor.ps1 parse: OK'
+      - name: Compile Chatterbox worker
+        shell: powershell
+        run: python -m py_compile .\workers\chatterbox_tts\server.py
