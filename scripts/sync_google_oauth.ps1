@@ -39,7 +39,7 @@ function Replace-RegexOnce {
   $rx = [regex]::new($Pattern, [System.Text.RegularExpressions.RegexOptions]::Multiline)
   $matches = $rx.Matches($Text)
   if ($matches.Count -ne 1) {
-    throw "$Label: attendu 1 bloc upstream, trouve $($matches.Count). Patch refuse pour ne pas corrompre Jarvis."
+    throw "${Label}: attendu 1 bloc upstream, trouve $($matches.Count). Patch refuse pour ne pas corrompre Jarvis."
   }
   return $rx.Replace($Text, $Replacement, 1)
 }
