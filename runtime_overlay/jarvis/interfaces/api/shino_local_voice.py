@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 import numpy as np
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from loguru import logger
 from pydantic import BaseModel
 
@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/shino/voice", tags=["shino-local-voice"])
 
 _MAX_PCM_BYTES = 12 * 1024 * 1024
 _HANDY_TIMEOUT_SECONDS = 60.0
-_DEFAULT_HANDY_MODEL = "handy-computer/whisper-large-v3-turbo-gguf"
+_DEFAULT_HANDY_MODEL = "whisper-large-v3-turbo"
 _DEFAULT_HANDY_DEVICE_INDEX = "0"
 
 _stt_lock = asyncio.Lock()
@@ -284,9 +284,9 @@ async def transcribe(request: Request) -> dict[str, object]:
         except Exception as exc:
             _stt_last_ms = round((time.perf_counter() - _stt_started_at) * 1000, 1)
             _stt_phase = "error"
-            _stt_last_error = str(exc)[:500]
+            _stt_last_error = str(exc)[:1000]
             logger.exception("SHINO Handy STT failed after {} ms", _stt_last_ms)
-            raise
+            raise HTTPException(status_code=502, detail=_stt_last_error) from exc
 
         return {
             "text": str(handy.get("text") or "").strip(),
