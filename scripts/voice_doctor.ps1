@@ -10,7 +10,7 @@ if ($env:SHINO_RUNTIME_ROOT) {
   $RuntimeRoot = Join-Path $env:USERPROFILE ".shino-os\runtime"
 }
 
-$Url = "http://127.0.0.1:8765"
+$Url = "http://127.0.0.1:18765"
 $EnsureWorker = Join-Path $Root "scripts\ensure_natural_tts.ps1"
 $WorkerRuntime = Join-Path $RuntimeRoot "workers\chatterbox"
 $WorkerPython = Join-Path $WorkerRuntime ".venv\Scripts\python.exe"
