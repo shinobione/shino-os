@@ -39,50 +39,77 @@ function Get-ListenerPids([int]$ListenPort) {
   return @($ids | Where-Object { $_ -gt 0 } | Select-Object -Unique)
 }
 
-function Test-IsJarvisProcess($Proc) {
-  if ($null -eq $Proc) { return $false }
-  $name = [string]$Proc.Name
-  $cmd = [string]$Proc.CommandLine
-  if (-not $cmd) { return $false }
+function Describe-Process([int]$Id) {
+  $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $Id" -ErrorAction SilentlyContinue
+  if ($proc) {
+    $name = [string]$proc.Name
+    $cmd = [string]$proc.CommandLine
+    if ($cmd) { return "$name PID=$Id [$cmd]" }
+    return "$name PID=$Id"
+  }
 
-  $rootPattern = [regex]::Escape($JarvisDir)
-  if ($name -match '(?i)^python(\.exe)?$' -and $cmd -match '(?i)-m\s+jarvis\.app\b') { return $true }
-  if ($name -match '(?i)^python(\.exe)?$' -and $cmd -match $rootPattern) { return $true }
-  if ($name -match '(?i)^cmd\.exe$' -and $cmd -match $rootPattern -and $cmd -match '(?i)jarvis\.app') { return $true }
+  $gp = Get-Process -Id $Id -ErrorAction SilentlyContinue
+  if ($gp) { return "$($gp.ProcessName) PID=$Id" }
+  return "inconnu PID=$Id"
+}
+
+function Stop-ListenerPid([int]$Id) {
+  # PID 0/4 are kernel/system listeners and must never be force-killed.
+  if ($Id -le 4) {
+    throw "Le port $Port est reserve par Windows (PID $Id); SHINO ne peut pas le recuperer automatiquement."
+  }
+
+  $desc = Describe-Process -Id $Id
+  Write-Shino "Port $Port occupe par $desc -> liberation SHINO." Yellow
+
+  try {
+    Stop-Process -Id $Id -Force -ErrorAction Stop
+  } catch {
+    # Some detached cmd/python trees are awkward through Stop-Process. taskkill /T
+    # also tears down children and is the reliable Windows fallback here.
+    & taskkill.exe /PID $Id /T /F *> $null
+  }
+}
+
+function Wait-PortFree([int]$ListenPort, [int]$TimeoutMs = 6000) {
+  $deadline = (Get-Date).AddMilliseconds($TimeoutMs)
+  do {
+    if (-not @(Get-ListenerPids -ListenPort $ListenPort).Count) { return $true }
+    Start-Sleep -Milliseconds 180
+  } while ((Get-Date) -lt $deadline)
   return $false
 }
 
 $pids = @(Get-ListenerPids -ListenPort $Port)
 if (-not $pids.Count) { exit 0 }
 
-$foreign = @()
+# SHINO intentionally owns one stable local origin for OAuth and UI:
+# http://localhost:8000 (or SHINO_JARVIS_PORT when explicitly overridden).
+# Therefore a stale/unknown listener on this canonical port is reclaimed here.
+# This script is only invoked by shino.bat before SHINO run/api, so we do not
+# silently hop to another port and break Google redirect URIs again.
 foreach ($id in $pids) {
-  $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $id" -ErrorAction SilentlyContinue
-  if (Test-IsJarvisProcess $proc) {
-    Write-Shino "Ancienne API Jarvis detectee sur le port $Port (PID $id) -> arret." Cyan
-    Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
-  } else {
-    $foreign += [pscustomobject]@{
-      Id = $id
-      Name = if ($proc) { [string]$proc.Name } else { "inconnu" }
-      CommandLine = if ($proc) { [string]$proc.CommandLine } else { "" }
+  Stop-ListenerPid -Id $id
+}
+
+if (-not (Wait-PortFree -ListenPort $Port -TimeoutMs 6000)) {
+  $remaining = @(Get-ListenerPids -ListenPort $Port)
+  # One last Windows-level attempt in case the listener belonged to a detached
+  # process tree whose parent exited during the first pass.
+  foreach ($id in $remaining) {
+    if ($id -gt 4) {
+      try { & taskkill.exe /PID $id /T /F *> $null } catch { }
     }
   }
+  Start-Sleep -Milliseconds 500
 }
 
-$deadline = (Get-Date).AddSeconds(5)
-do {
-  Start-Sleep -Milliseconds 200
-  $remaining = @(Get-ListenerPids -ListenPort $Port)
-} while ($remaining.Count -and (Get-Date) -lt $deadline)
-
-if (-not $remaining.Count) {
-  Write-Shino "Port $Port libere avant demarrage." DarkGray
-  exit 0
+$remaining = @(Get-ListenerPids -ListenPort $Port)
+if ($remaining.Count) {
+  $details = @($remaining | ForEach-Object { Describe-Process -Id $_ }) -join ', '
+  Write-Shino "Impossible de liberer le port $Port: $details" Red
+  exit 1
 }
 
-# Never kill an unrelated app just because it uses SHINO's preferred port.
-$details = @($foreign | ForEach-Object { "$($_.Name) PID=$($_.Id)" }) -join ', '
-if (-not $details) { $details = "PID(s): $($remaining -join ', ')" }
-Write-Shino "Port $Port encore occupe par un process non-Jarvis: $details" Yellow
+Write-Shino "Port $Port libere et reserve a SHINO." Cyan
 exit 0
