@@ -1,0 +1,26 @@
+#shino-command-center-container .sho-perm-btn.active span,
+#shino-command-center-container .sho-perm-btn.active b {
+  color: #56ffd1 !important;
+}
+#shino-command-center-container .sho-perm-btn.active {
+  border-color: rgba(86,255,209,.42) !important;
+  background: rgba(14,73,71,.28) !important;
+  box-shadow: 0 0 22px rgba(86,255,209,.09) !important;
+}
+#shino-command-center-container .sho-perm-btn.unavailable {
+  opacity: .45;
+}
+
+@media (max-width: 2900px) {
+  #shino-command-center-container .sho-topstats {
+    gap: 9px !important;
+  }
+  #shino-command-center-container .sho-native-action {
+    min-width: 112px !important;
+    padding-left: 10px !important;
+    padding-right: 10px !important;
+  }
+  #shino-command-center-container .sho-native-action b {
+    font-size: 7.5px !important;
+  }
+}
