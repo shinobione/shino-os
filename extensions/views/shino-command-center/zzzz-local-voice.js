@@ -70,6 +70,12 @@
     if (raw.includes('large-v3-turbo')) return 'TURBO';
     return raw.split('/').pop().replace(/-gguf$/i, '').toUpperCase();
   }
+  function ttsLabel(engine) {
+    const raw = String(engine || '').toLowerCase();
+    if (raw.includes('chatterbox')) return 'CHATTERBOX V3';
+    if (raw.includes('piper')) return 'PIPER';
+    return raw ? raw.toUpperCase() : 'TTS';
+  }
 
   function flatten() {
     const total = chunks.reduce((sum, c) => sum + c.length, 0);
@@ -232,10 +238,16 @@
 
   async function synthesize(text) {
     const response = await fetch('/api/shino/voice/tts', {
-      method: 'POST', headers: authHeaders({ 'Content-Type': 'application/json' }), body: JSON.stringify({ text }),
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ text, language_id: 'fr' }),
     });
     if (!response.ok) throw new Error(`TTS HTTP ${response.status}`);
-    return response.arrayBuffer();
+    return {
+      bytes: await response.arrayBuffer(),
+      engine: response.headers.get('X-SHINO-TTS') || 'piper',
+      durationMs: Number(response.headers.get('X-SHINO-TTS-MS') || 0),
+    };
   }
 
   async function playAudio(bytes) {
@@ -250,6 +262,87 @@
         node.start();
       } catch (err) { reject(err); }
     });
+  }
+
+  function normalizeSpeech(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return '';
+    try {
+      return String(window.SHINOSpeech?.normalize?.(raw) || raw).trim();
+    } catch (_) {
+      return raw;
+    }
+  }
+
+  function extractReadySpeech(buffer, flush = false) {
+    let rest = String(buffer || '');
+    const segments = [];
+
+    while (rest.trim()) {
+      const match = rest.match(/^([\s\S]*?[.!?…]+)(?=\s|$)/);
+      if (!match) break;
+      const segment = match[1].trim();
+      if (segment) segments.push(segment);
+      rest = rest.slice(match[0].length).trimStart();
+    }
+
+    if (!flush && rest.length > 280) {
+      const windowText = rest.slice(0, 260);
+      let cut = Math.max(windowText.lastIndexOf('; '), windowText.lastIndexOf(': '), windowText.lastIndexOf(', '));
+      if (cut < 120) cut = windowText.lastIndexOf(' ');
+      if (cut > 100) {
+        segments.push(rest.slice(0, cut + 1).trim());
+        rest = rest.slice(cut + 1).trimStart();
+      }
+    }
+
+    if (flush && rest.trim()) {
+      segments.push(rest.trim());
+      rest = '';
+    }
+
+    return { segments, rest };
+  }
+
+  function createSpeechStreamer() {
+    let pendingText = '';
+    let chain = Promise.resolve();
+    let spokenSegments = 0;
+    let lastEngine = 'piper';
+
+    function enqueue(rawSegment) {
+      const spoken = normalizeSpeech(rawSegment);
+      if (!spoken || spoken.length < 2) return;
+
+      chain = chain.then(async () => {
+        setUi('SPEAKING…', ttsLabel(lastEngine), true);
+        setCore('speaking');
+        const audio = await synthesize(spoken);
+        lastEngine = audio.engine || lastEngine;
+        setUi('SPEAKING…', `${ttsLabel(lastEngine)} · STREAM`, true);
+        if (audio.durationMs > 0) {
+          console.info(`[SHINO-OS] TTS ${ttsLabel(lastEngine)} ${Math.round(audio.durationMs)}ms · ${spoken.length} chars`);
+        }
+        await playAudio(audio.bytes);
+        spokenSegments += 1;
+      });
+    }
+
+    return {
+      push(delta) {
+        pendingText += String(delta || '');
+        const ready = extractReadySpeech(pendingText, false);
+        pendingText = ready.rest;
+        ready.segments.forEach(enqueue);
+      },
+      async finish() {
+        const ready = extractReadySpeech(pendingText, true);
+        pendingText = ready.rest;
+        ready.segments.forEach(enqueue);
+        await chain;
+        return { engine: lastEngine, segments: spokenSegments };
+      },
+    };
   }
 
   async function stopAndProcess() {
@@ -293,18 +386,22 @@
       setCore('thinking');
       if (loadMs > 0) console.info(`[SHINO-OS] Handy load ${Math.round(loadMs)}ms, infer ${Math.round(inferMs)}ms`);
       if (!window.SHINOChat?.sendText) throw new Error('chat bridge unavailable');
-      const answer = await window.SHINOChat.sendText(text, { deferIdle: true, noFocus: true });
+
+      const speech = createSpeechStreamer();
+      const answer = await window.SHINOChat.sendText(text, {
+        deferIdle: true,
+        noFocus: true,
+        onDelta: (delta) => speech.push(delta),
+      });
       if (!answer) throw new Error('empty assistant response');
 
-      setUi('SPEAKING…', 'PIPER', true);
-      setCore('speaking');
-      const audio = await synthesize(answer);
-      await playAudio(audio);
-      setUi('VOICE READY', stt.backend === 'lan' ? 'LAN + PIPER' : 'HANDY + PIPER', false);
+      const spoken = await speech.finish();
+      const finalTts = ttsLabel(spoken.engine);
+      setUi('VOICE READY', `${stt.backend === 'lan' ? 'LAN' : 'HANDY'} + ${finalTts}`, false);
       setCore('idle');
     } catch (err) {
       console.error('[SHINO-OS] Local voice turn failed:', err);
-      setUi('VOICE ERROR', 'HANDY ERR', false);
+      setUi('VOICE ERROR', 'VOICE ERR', false);
       setCore('error');
       notify(`Voix locale: ${err.message || err}`, 'err');
       setTimeout(() => { setUi('VOICE READY', 'HANDY READY', false); setCore('idle'); }, 1800);
@@ -323,8 +420,9 @@
   async function refreshStatus() {
     try {
       const status = await fetchStatus();
-      if (status.stt === 'lan') setUi('VOICE READY', 'LAN READY', false);
-      else if (status.handy_available) setUi('VOICE READY', 'HANDY · VULKAN', false);
+      const tts = status.tts_url ? 'CHATTERBOX' : 'PIPER';
+      if (status.stt === 'lan') setUi('VOICE READY', `LAN · ${tts}`, false);
+      else if (status.handy_available) setUi('VOICE READY', `HANDY · ${tts}`, false);
       else setUi('VOICE OFF', 'HANDY MISSING', false);
     } catch (_) {}
   }
