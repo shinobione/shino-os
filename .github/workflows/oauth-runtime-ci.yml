@@ -12,94 +12,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build pristine Jarvis OAuth fixture
+      - name: Checkout exact pinned Jarvis runtime
         shell: powershell
         run: |
           $env:SHINO_RUNTIME_ROOT = Join-Path $env:RUNNER_TEMP 'shino-oauth-runtime'
           $jarvis = Join-Path $env:SHINO_RUNTIME_ROOT 'jarvis-OS'
-          $api = Join-Path $jarvis 'src\jarvis\interfaces\api'
-          $static = Join-Path $jarvis 'src\jarvis\interfaces\ui\static'
-          New-Item -ItemType Directory -Force -Path $api | Out-Null
-          New-Item -ItemType Directory -Force -Path $static | Out-Null
+          New-Item -ItemType Directory -Force -Path $jarvis | Out-Null
+          git -C $jarvis init
+          git -C $jarvis remote add origin https://github.com/Grominet95/jarvis-OS.git
+          git -C $jarvis fetch --depth=1 origin 570200276bad54dd4dba49843deb785c000bc19f
+          if ($LASTEXITCODE -ne 0) { throw 'failed to fetch pinned Jarvis runtime' }
+          git -C $jarvis checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'failed to checkout pinned Jarvis runtime' }
 
-          $oauth = @'
-          import os
-          class DummySecret:
-              def get_secret_value(self): return ""
-          class DummySettings:
-              google_client_id = ""
-              google_client_secret = DummySecret()
-          settings = DummySettings()
-          class RedirectResponse:
-              def __init__(self, url): self.url = url
-          class Request: pass
-          class DummyLogger:
-              def error(self, *args, **kwargs): pass
-          logger = DummyLogger()
-
-          def _redirect_uri(request: Request, service: str) -> str:
-              base = str(request.base_url).rstrip("/")
-              if not base.startswith("https://") and "127.0.0.1" not in base and "localhost" not in base:
-                  base = base.replace("http://", "https://", 1)
-              return f"{base}/api/google/callback/{service}"
-
-          async def google_auth(service: str, request: Request) -> RedirectResponse:
-              if service not in ("gmail", "calendar"):
-                  return RedirectResponse("/capabilities?error=unknown_service")
-
-              # Si les credentials sont fournis en .env (UI), (re)génère le fichier JSON
-              return RedirectResponse("ok")
-          '@
-
-          $cap = @'
-          (function () {
-            "use strict";
-            const J = { notify: () => {}, mountAtmosphere: () => {}, mountRooms: () => {} };
-
-            function triggerConnect(c, cfg, expandEl) {
-              if (cfg.kind === "oauth") {
-                window.location.href = cfg.url;
-                return;
-              }
-
-              const ss = { api_keys: {} };
-              const f = { key: "GOOGLE_CLIENT_ID", secret: false };
-              const inp = { value: "", placeholder: "", dataset: {} };
-              const connectBtn = { disabled: false, textContent: "", addEventListener: () => {} };
-
-                  if (cfg.kind === "oauth_key") {
-                    const v = (ss.api_keys || {})[f.key] || "";
-                    if (v) inp.value = v;
-                  }
-
-                  // console.cloud.google.com · OAuth client type « Web » · Redirect URIs : http://127.0.0.1:8000/api/google/callback/gmail + .../calendar
-                  const placeholder = true;
-                  if (placeholder) {
-                    connectBtn.addEventListener("click", () => { window.location.href = cfg.url; });
-                  }
-            }
-
-            J.mountAtmosphere();
-
-            J.mountRooms({});
-          })();
-          '@
-
-          $html = @'
-          <!doctype html><html><body><script src="/capabilities.js"></script></body></html>
-          '@
-
-          Set-Content -Path (Join-Path $api 'google_oauth.py') -Value $oauth -Encoding UTF8
-          Set-Content -Path (Join-Path $static 'capabilities.js') -Value $cap -Encoding UTF8
-          Set-Content -Path (Join-Path $static 'capabilities.html') -Value $html -Encoding UTF8
-
-          git init $jarvis
-          git -C $jarvis config user.email 'ci@shino.local'
-          git -C $jarvis config user.name 'SHINO CI'
-          git -C $jarvis add .
-          git -C $jarvis commit -m 'pristine oauth fixture'
-
-      - name: Patch OAuth runtime twice from pristine HEAD
+      - name: Patch exact runtime twice
         shell: powershell
         run: |
           $env:SHINO_RUNTIME_ROOT = Join-Path $env:RUNNER_TEMP 'shino-oauth-runtime'
@@ -117,6 +43,8 @@ jobs:
 
           node --check $js
           if ($LASTEXITCODE -ne 0) { throw 'patched capabilities.js syntax invalid' }
+          python -m py_compile $api
+          if ($LASTEXITCODE -ne 0) { throw 'patched google_oauth.py syntax invalid' }
 
           $ui = Get-Content $js -Raw
           $oauth = Get-Content $api -Raw
@@ -128,6 +56,7 @@ jobs:
           if ($ui -notmatch 'target\.location\.href\s*=\s*cfg\.url') { throw 'top-level same-tab OAuth navigation missing' }
           if ($oauth -notmatch 'http://localhost:18777/api/google/callback') { throw 'canonical OAuth callback missing' }
           if ($oauth -notmatch 'invalid_client_config') { throw 'masked/invalid client guard missing' }
-          if ($page -notmatch 'capabilities\.js\?v=shino-oauth-clean-3') { throw 'capabilities cache bust missing' }
+          if ($oauth -notmatch '_maybe_write_credentials_from_env\(request\)') { throw 'Jarvis credential regeneration call missing' }
+          if ($page -notmatch 'capabilities\.js\?v=shino-oauth-clean-4') { throw 'capabilities cache bust missing' }
 
-          Write-Host 'deterministic OAuth runtime patch: OK'
+          Write-Host 'exact pinned Jarvis OAuth runtime patch: OK'
