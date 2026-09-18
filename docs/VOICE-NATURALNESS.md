@@ -77,14 +77,14 @@ La première phrase peut commencer à être synthétisée avant que Qwen ait ter
 
 ### A2.3 Nouveau moteur TTS
 
-État : **Chatterbox intégré, installation locale à faire**.
+État : **Chatterbox V3 installé et synthèse directe validée précédemment; gate SHINO complet encore ouvert**. Voir [audit du 19/09/2026](VOICE-GATE-AUDIT.md).
 
 Architecture :
 
 ```text
 SHINO/Jarvis
    ↓ HTTP local
-worker Chatterbox résident :127.0.0.1:8765
+worker Chatterbox résident :127.0.0.1:18765
    ↓
 Chatterbox Multilingual V3 / français
 ```
@@ -92,9 +92,9 @@ Chatterbox Multilingual V3 / français
 Le worker est isolé du runtime Jarvis dans son propre venv et garde le modèle chargé. Le launcher SHINO :
 
 - démarre automatiquement le worker s'il est installé ;
-- lance un warmup en arrière-plan ;
+- attend le warmup avant de lancer Jarvis (jusqu'à 180 s pour le warmup) ;
 - configure `SHINO_TTS_URL` ;
-- retombe automatiquement sur Piper si le worker n'est pas disponible ou si une synthèse échoue.
+- retente Chatterbox à chaque phrase même après un échec au démarrage; Piper est utilisé sur échec réel avec raison et compteur dans `/api/shino/voice/status`.
 
 Installation Windows :
 

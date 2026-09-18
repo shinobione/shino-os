@@ -7,6 +7,19 @@ Cette branche contient le code réel de V0.2. Pour éviter que deux énormes roa
 
 ## État instantané de cette branche au 04/09/2026
 
+### Audit local du 19/09/2026
+
+- Audit détaillé, limites et procédure du gate : [`docs/VOICE-GATE-AUDIT.md`](docs/VOICE-GATE-AUDIT.md).
+- Runtime local vérifié au SHA de `UPSTREAM.lock`. `update` restaure désormais ce pin au lieu de suivre `origin/main`.
+- Jarvis utilise **18777** pour son origine OAuth stable; Chatterbox reste **18765**. Les mentions `8765` et de sélection automatique de port dans l'ancienne roadmap `origin/main` sont obsolètes.
+- Démarrage lent/échec du warmup : endpoint Chatterbox conservé, nouvelle tentative à chaque phrase, fallback diagnostiqué (compteur et dernière erreur conservés).
+- Cleanup SHINO limité aux processus runtime identifiés; port inconnu refusé. L'ancien script de récupération arbitraire de port est désactivé.
+- Navigateur : Handy headless par défaut, état TTS fondé sur la réponse, queue arrêtée lors d'une erreur de tour, code incomplet non prononcé.
+- Tests locaux : 8 régressions Python, tests queue navigateur, mocks PowerShell, smokes Windows existants et OAuth appliqué deux fois sur fixtures du pin : **OK**.
+- **Gate physique non exécuté**, aucun succès micro/Qwen/Chatterbox simultané établi. Barge-in seulement conçu, pas activé. PR #2 reste draft/non mergée. CI du nouveau commit à vérifier après publication.
+
+### État historique (04/09/2026)
+
 - Branche : `integration/jarvis-upstream`
 - PR : #2 — `V0.2 — Jarvis-powered SHINO-OS integration`
 - Architecture : Jarvis OS upstream séparé + overlay SHINO

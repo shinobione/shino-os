@@ -37,7 +37,7 @@ Initial integration pin:
 
 `570200276bad54dd4dba49843deb785c000bc19f`
 
-Fresh installs start at that commit. `shino.bat update` intentionally advances the local runtime to current `origin/main`; subsequent runs keep that updated local commit.
+Fresh installs and `shino.bat update` use `UPSTREAM.lock`. Running a different runtime commit is refused; advancing Jarvis requires a reviewed lock change.
 
 ## Windows — first run
 
@@ -73,6 +73,7 @@ Other passthrough commands:
 - **Handy:** must be installed, but its GUI does **not** need to remain open.
 - **Whisper Large V3 Turbo:** downloaded in Handy; SHINO invokes Handy headlessly for STT.
 - **Piper:** used inside Jarvis; no separate app/process to launch.
+- **Chatterbox Multilingual V3:** primary TTS worker on `http://127.0.0.1:18765`, started and warmed by SHINO. Piper is fallback only when synthesis fails.
 - **Chrome:** hosts the cockpit, microphone capture and future MediaPipe vision UI.
 
 The detailed matrix is maintained in [`ROADMAP.md`](ROADMAP.md).
@@ -91,7 +92,21 @@ Current V0.2 integration features:
 - single Jarvis shell + internal iframe navigation
 - local microphone bridge
 - Handy / Whisper Large V3 Turbo STT target on RTX 3060 Vulkan
-- Piper local TTS
+- Chatterbox V3 phrase streaming, with diagnosed Piper fallback
+
+Jarvis uses the stable OAuth origin `http://localhost:18777` by default. An unknown listener blocks startup rather than being killed. `SHINO_JARVIS_PORT` can select another non-reserved port; update OAuth redirect configuration accordingly.
+
+The end-to-end physical Chatterbox gate is still open. See [the audit and voice gate procedure](docs/VOICE-GATE-AUDIT.md) for checks, diagnostics, limitations and the deferred barge-in design.
+
+## Local checks
+
+Use Python 3.12 with `fastapi`, `httpx`, `numpy`, `loguru`, `pyyaml`, plus Node and Windows PowerShell:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/run_local_checks.ps1 -Python "C:\Users\jerry\AppData\Local\SHINO-OS\runtime\jarvis-OS\bundle\.venv\Scripts\python.exe" -PinnedRuntime "C:\Users\jerry\AppData\Local\SHINO-OS\runtime\jarvis-OS"
+```
+
+These tests use mocks and temporary fixtures; they do not start the real launcher, microphone or GPU worker. CI runs the regression suite and separately checks OAuth against the pinned upstream.
 
 ## Vision / gestures
 
