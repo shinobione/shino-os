@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -143,9 +143,10 @@ if ($naturalTtsUrl) {
   Set-EnvValue "SHINO_TTS_LANGUAGE" "fr"
   Write-Host "[SHINO-OS] TTS naturel: Chatterbox Multilingual V3 resident ($naturalTtsUrl), Piper fallback." -ForegroundColor Cyan
 } else {
-  Remove-Item Env:SHINO_TTS_URL -ErrorAction SilentlyContinue
-  Set-EnvValue "SHINO_TTS_URL" ""
-  Write-Host "[SHINO-OS] TTS naturel non installe: Piper reste le fallback actif." -ForegroundColor Yellow
+  # Startup failure must not permanently disable a worker that becomes ready later.
+  $env:SHINO_TTS_URL = "http://127.0.0.1:18765"
+  Set-EnvValue "SHINO_TTS_URL" $env:SHINO_TTS_URL
+  Write-Host "[SHINO-OS] Chatterbox non pret au lancement; chaque phrase retentera 18765 avant Piper. Voir workers\chatterbox\logs et /api/shino/voice/status." -ForegroundColor Yellow
 }
 
 Write-Host "[SHINO-OS] Voix locale synchronisee: Handy + Whisper Large V3 Turbo Q8_0 (device 0) + Ollama + TTS." -ForegroundColor Cyan

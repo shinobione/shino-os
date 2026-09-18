@@ -25,7 +25,7 @@ router = APIRouter(prefix="/api/shino/voice", tags=["shino-local-voice"])
 _MAX_PCM_BYTES = 12 * 1024 * 1024
 _HANDY_TIMEOUT_SECONDS = 60.0
 _HANDY_RESIDENT_RESULT_TIMEOUT_SECONDS = 18.0
-_NATURAL_TTS_TIMEOUT_SECONDS = 45.0
+_NATURAL_TTS_TIMEOUT_SECONDS = 120.0
 _DEFAULT_HANDY_MODEL = "whisper-large-v3-turbo"
 _DEFAULT_HANDY_DEVICE_INDEX = "0"
 
@@ -49,9 +49,11 @@ _handy_resident_last_ms: float | None = None
 _handy_resident_last_error = ""
 _handy_resident_started_by_shino = False
 
-_tts_last_backend = "piper"
+_tts_last_backend = "not-run"
 _tts_last_error = ""
 _tts_last_ms: float | None = None
+_tts_fallback_count = 0
+_tts_last_fallback_error = ""
 
 
 class TTSRequest(BaseModel):
@@ -68,7 +70,7 @@ def _handy_device_index() -> str:
 
 
 def _natural_tts_url() -> str:
-    return (os.getenv("SHINO_TTS_URL") or "").strip().rstrip("/")
+    return (os.getenv("SHINO_TTS_URL") or "").strip().rstrip("/") or "http://127.0.0.1:18765"
 
 
 def _natural_tts_language() -> str:
@@ -399,6 +401,8 @@ async def status() -> dict[str, object]:
         "tts_url": _natural_tts_url() or None,
         "tts_last_ms": _tts_last_ms,
         "tts_last_error": _tts_last_error or None,
+        "tts_fallback_count": _tts_fallback_count,
+        "tts_last_fallback_error": _tts_last_fallback_error or None,
         "tts_fallback": settings.tts_provider,
         "llm": settings.llm_provider,
     }
@@ -668,6 +672,8 @@ async def _natural_tts(text: str, language_id: str) -> tuple[bytes, str, float] 
     if response.status_code != 200:
         detail = response.text[-600:]
         raise RuntimeError(f"Chatterbox HTTP {response.status_code}: {detail}")
+    if not (len(response.content) > 44 and response.content[:4] == b"RIFF" and response.content[8:12] == b"WAVE"):
+        raise RuntimeError("Chatterbox returned empty or invalid WAV audio")
     elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
     engine = response.headers.get("X-SHINO-TTS", "chatterbox-v3")
     return response.content, engine, elapsed_ms
@@ -676,6 +682,7 @@ async def _natural_tts(text: str, language_id: str) -> tuple[bytes, str, float] 
 @router.post("/tts")
 async def tts(body: TTSRequest) -> Response:
     global _tts_last_backend, _tts_last_error, _tts_last_ms
+    global _tts_fallback_count, _tts_last_fallback_error
 
     text = body.text.strip()
     if not text:
@@ -697,7 +704,9 @@ async def tts(body: TTSRequest) -> Response:
                     headers={"X-SHINO-TTS": engine, "X-SHINO-TTS-MS": str(elapsed_ms)},
                 )
         except Exception as exc:
-            _tts_last_error = str(exc)[:800]
+            _tts_last_error = f"{type(exc).__name__}: {exc}"[:800]
+            _tts_fallback_count += 1
+            _tts_last_fallback_error = _tts_last_error
             logger.warning("SHINO natural TTS failed -> Piper fallback: {}", _tts_last_error)
 
     started = time.perf_counter()
@@ -707,5 +716,8 @@ async def tts(body: TTSRequest) -> Response:
     return Response(
         content=audio,
         media_type="audio/wav",
-        headers={"X-SHINO-TTS": "piper", "X-SHINO-TTS-MS": str(_tts_last_ms)},
+        headers={
+            "X-SHINO-TTS": "piper", "X-SHINO-TTS-MS": str(_tts_last_ms),
+            "X-SHINO-TTS-FALLBACK": "chatterbox-failed",
+        },
     )

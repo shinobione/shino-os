@@ -56,6 +56,11 @@ function Ensure-Upstream {
     if ($LASTEXITCODE -ne 0) { throw "Impossible de checkout le commit upstream $($lock.ref)." }
     Write-Shino "Runtime initial verrouille sur $($lock.ref)."
   }
+  $runtimeSha = git -C $JarvisDir rev-parse HEAD
+  if ($LASTEXITCODE -ne 0) { throw 'Impossible de lire le commit runtime.' }
+  if ($runtimeSha.Trim() -ne $lock.ref -and $Command -ne 'update') {
+    throw 'Runtime different de UPSTREAM.lock; executer shino.bat update pour restaurer le pin.'
+  }
 }
 
 function Ensure-SetupBundle {
@@ -122,6 +127,7 @@ function Get-ShinoStableJarvisPort {
       throw "SHINO_JARVIS_PORT invalide: $($env:SHINO_JARVIS_PORT)"
     }
     if ($parsed -lt 1 -or $parsed -gt 65535) { throw "SHINO_JARVIS_PORT hors plage: $parsed" }
+    if ($parsed -in @(18765, 8765, 7880, 7881)) { throw "SHINO_JARVIS_PORT reserve a un autre service: $parsed" }
     $port = $parsed
   }
   return $port
@@ -154,19 +160,31 @@ function Get-PortListenerPids([int]$Port) {
   }
 }
 
+function Test-ShinoRuntimeProcess($Process) {
+  if ($null -eq $Process) { return $false }
+  $executable = [string]$Process.ExecutablePath
+  $runtimePrefix = [IO.Path]::GetFullPath($JarvisDir).TrimEnd('\') + '\'
+  if (-not $executable.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+  if ([string]$Process.Name -eq 'livekit-server.exe') { return $true }
+  return ([string]$Process.Name -match '^(python|pythonw)\.exe$' -and
+    [string]$Process.CommandLine -match '(-m\s+jarvis\b|[\\/\s"]main\.py\b|[\\/\s"]voice_agent\.py\b)')
+}
+
 function Stop-StaleJarvisRuntime([int]$Port) {
-  # Reap the WHOLE previous Jarvis runtime, not only the PID observed once on the
-  # API port. Ctrl+C through nested batch files used to orphan hidden cmd/python
-  # children; killing the whole runtime tree prevents a parent from re-binding.
-  $escapedRuntime = [regex]::Escape($JarvisDir)
+  # Reap only verified runtime executables/entry points, never arbitrary shells
+  # merely mentioning the runtime path or unknown listeners on the API port.
+  # Refuse unknown listeners BEFORE stopping any runtime process. Stable OAuth
+  # ports do not confer ownership over arbitrary applications.
+  foreach ($listenerPid in @(Get-PortListenerPids -Port $Port)) {
+    $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $listenerPid" -ErrorAction SilentlyContinue
+    if (-not (Test-ShinoRuntimeProcess $owner)) {
+      throw "Port $Port occupe par un processus non reconnu (PID $listenerPid); aucun arret automatique."
+    }
+  }
   $victims = @()
   try {
     $victims = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-      $cmd = [string]$_.CommandLine
-      $name = [string]$_.Name
-      if (-not $cmd) { return $false }
-      if ($cmd -notmatch $escapedRuntime) { return $false }
-      return $name -match '^(python|pythonw|cmd|powershell|pwsh)\.exe$'
+      Test-ShinoRuntimeProcess $_
     } | Select-Object -ExpandProperty ProcessId -Unique)
   } catch { $victims = @() }
 
@@ -175,12 +193,7 @@ function Stop-StaleJarvisRuntime([int]$Port) {
   foreach ($victimProcessId in $victims) {
     if ($victimProcessId -le 4 -or $victimProcessId -eq $PID) { continue }
     try { Stop-Process -Id $victimProcessId -Force -ErrorAction SilentlyContinue } catch { }
-    try { & taskkill.exe /PID $victimProcessId /T /F *> $null } catch { }
   }
-
-  # LiveKit is also part of the Jarvis run lifecycle and may survive an aborted
-  # parent shell. Killing it here is safe because SHINO launches its own instance.
-  try { Stop-Process -Name 'livekit-server' -Force -ErrorAction SilentlyContinue } catch { }
 
   $deadline = (Get-Date).AddSeconds(6)
   do {
@@ -194,8 +207,11 @@ function Stop-StaleJarvisRuntime([int]$Port) {
     # between the first observation and taskkill.
     foreach ($listenerPid in $listeners) {
       if ($listenerPid -le 4 -or $listenerPid -eq $PID) { continue }
+      $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $listenerPid" -ErrorAction SilentlyContinue
+      if (-not (Test-ShinoRuntimeProcess $owner)) {
+        throw "Port $Port repris par un processus non reconnu (PID $listenerPid); arret refuse."
+      }
       try { Stop-Process -Id $listenerPid -Force -ErrorAction SilentlyContinue } catch { }
-      try { & taskkill.exe /PID $listenerPid /T /F *> $null } catch { }
     }
     Start-Sleep -Milliseconds 180
   } while ((Get-Date) -lt $deadline)
@@ -307,11 +323,12 @@ function Show-Status {
 function Update-Upstream {
   Require-Git
   Ensure-Upstream
-  Write-Shino 'Mise a jour volontaire vers origin/main...'
-  git -C $JarvisDir fetch origin --prune
+  $lock = Read-UpstreamLock
+  Write-Shino "Synchronisation vers UPSTREAM.lock: $($lock.ref)"
+  git -C $JarvisDir fetch origin $lock.ref
   if ($LASTEXITCODE -ne 0) { throw 'Echec du fetch upstream.' }
-  git -C $JarvisDir checkout --detach origin/main
-  if ($LASTEXITCODE -ne 0) { throw 'Echec du checkout origin/main.' }
+  git -C $JarvisDir checkout --detach $lock.ref
+  if ($LASTEXITCODE -ne 0) { throw 'Echec du checkout UPSTREAM.lock.' }
   $sha = (git -C $JarvisDir rev-parse HEAD).Trim()
   Write-Shino "Runtime mis a jour: $sha"
 }

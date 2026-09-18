@@ -6,6 +6,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+if ($Port -ne 18765) { throw 'Chatterbox SHINO doit utiliser le port 18765.' }
 
 if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 if (-not $RuntimeRoot) {
@@ -50,14 +51,16 @@ function Stop-StaleChatterboxWorker {
     $expectedPython = ""
     try { $expectedPython = [string](Resolve-Path $Python -ErrorAction Stop) } catch { }
 
-    if ($processPath -and $expectedPython -and ($processPath -ieq $expectedPython)) {
+    $owner = Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction Stop
+    if ($processPath -and $expectedPython -and ($processPath -ieq $expectedPython) -and
+        ([string]$owner.CommandLine -match 'workers\.chatterbox_tts\.server:app')) {
       Write-Host "[SHINO-OS] Ancien worker Chatterbox detecte (PID $pidValue); redemarrage avec le code courant." -ForegroundColor Yellow
       Stop-Process -Id $pidValue -Force -ErrorAction Stop
       for ($i = 0; $i -lt 20; $i++) {
         Start-Sleep -Milliseconds 250
-        if (-not (Test-ChatterboxHealth)) { return $true }
+        if (-not @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue).Count) { return $true }
       }
-      return $true
+      return $false
     }
 
     Write-Host "[SHINO-OS] Port $Port occupe par un processus non reconnu (PID $pidValue, $processPath); worker non tue." -ForegroundColor Yellow
@@ -87,11 +90,14 @@ function Invoke-ChatterboxWarmup {
 
 function Test-CurrentWorkerSchema($Health) {
   if ($null -eq $Health) { return $false }
-  return $null -ne $Health.PSObject.Properties["ready"]
+  return ((Get-OptionalProperty $Health "engine" "") -eq "chatterbox-multilingual-v3" -and
+    (Get-OptionalProperty $Health "ok" $false) -eq $true -and
+    $null -ne $Health.PSObject.Properties["ready"])
 }
 
 function Start-ChatterboxWorker {
   if (-not (Test-Path $Python)) {
+    Write-Host "[SHINO-OS] Environnement Chatterbox absent: $Python" -ForegroundColor Yellow
     return $false
   }
 
@@ -115,12 +121,16 @@ function Start-ChatterboxWorker {
     RedirectStandardOutput = $outLog
     RedirectStandardError = $errLog
   }
-  Start-Process @startParams | Out-Null
+  $workerProcess = Start-Process @startParams -PassThru
 
-  for ($i = 0; $i -lt 40; $i++) {
+  for ($i = 0; $i -lt 150; $i++) {
     Start-Sleep -Milliseconds 400
+    if ($workerProcess.HasExited) {
+      Write-Host "[SHINO-OS] Worker quitte (exit $($workerProcess.ExitCode)); voir $errLog" -ForegroundColor Yellow
+      return $false
+    }
     $health = Test-ChatterboxHealth
-    if ($health) { return $true }
+    if (Test-CurrentWorkerSchema $health) { return $true }
   }
   return $false
 }

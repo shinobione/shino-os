@@ -29,6 +29,7 @@ _synth_count = 0
 _conditioned_reference = ""
 _conditioned_reference_mtime = 0.0
 _conditioning_ms = 0.0
+_conditioned_exaggeration = None
 
 
 class SynthesisRequest(BaseModel):
@@ -159,6 +160,7 @@ def _ensure_model():
 def _prepare_reference_once(model, reference: str | None, exaggeration: float) -> None:
     global _conditioned_reference, _conditioned_reference_mtime, _conditioning_ms
     global _last_reference, _last_reference_duration
+    global _conditioned_exaggeration
 
     if not reference:
         return
@@ -168,7 +170,8 @@ def _prepare_reference_once(model, reference: str | None, exaggeration: float) -
     _last_reference = reference
     _last_reference_duration = _reference_duration(reference)
 
-    if _conditioned_reference == reference and _conditioned_reference_mtime == mtime:
+    if (_conditioned_reference == reference and _conditioned_reference_mtime == mtime
+            and _conditioned_exaggeration == exaggeration):
         return
 
     started = time.perf_counter()
@@ -176,6 +179,7 @@ def _prepare_reference_once(model, reference: str | None, exaggeration: float) -
     _conditioning_ms = round((time.perf_counter() - started) * 1000, 1)
     _conditioned_reference = reference
     _conditioned_reference_mtime = mtime
+    _conditioned_exaggeration = exaggeration
 
 
 def _to_wav_bytes(wav_tensor, sample_rate: int) -> bytes:

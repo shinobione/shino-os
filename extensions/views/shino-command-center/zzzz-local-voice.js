@@ -187,7 +187,9 @@
     }
     try {
       await ensurePlaybackContext();
-      const resident = await startResidentHandy();
+      // The validated path is browser capture -> Handy headless. Resident mode
+      // controls a GUI process and must not be armed implicitly.
+      const resident = false;
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
@@ -229,6 +231,7 @@
         try { await stopResidentHandy(); } catch (_) {}
       }
       captureActive = false;
+      await closeCapture();
       setUi('VOICE OFF', 'MIC ERROR', false);
       setCore('error');
       notify(`Micro impossible: ${err.message || err}`, 'err');
@@ -305,29 +308,39 @@
     }
   }
 
-  async function synthesize(text) {
+  async function synthesize(text, signal) {
     const response = await fetch('/api/shino/voice/tts', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ text, language_id: 'fr' }),
+      signal,
     });
     if (!response.ok) throw new Error(`TTS HTTP ${response.status}`);
+    const fallback = response.headers.get('X-SHINO-TTS-FALLBACK');
+    if (fallback) console.warn(`[SHINO-OS] Piper fallback: ${fallback}; details: /api/shino/voice/status (tts_last_error)`);
     return {
       bytes: await response.arrayBuffer(),
-      engine: response.headers.get('X-SHINO-TTS') || 'piper',
+      engine: response.headers.get('X-SHINO-TTS') || 'unknown',
       durationMs: Number(response.headers.get('X-SHINO-TTS-MS') || 0),
     };
   }
 
-  async function playAudio(bytes) {
+  async function playAudio(bytes, signal) {
     const ctx = await ensurePlaybackContext();
     const decoded = await ctx.decodeAudioData(bytes.slice(0));
+    if (signal?.aborted) return;
     return new Promise((resolve, reject) => {
       try {
         const node = ctx.createBufferSource();
         node.buffer = decoded;
         node.connect(ctx.destination);
-        node.onended = resolve;
+        const stop = () => { try { node.stop(); } catch (_) {} };
+        node.onended = () => {
+          signal?.removeEventListener('abort', stop);
+          node.disconnect();
+          resolve();
+        };
+        signal?.addEventListener('abort', stop, { once: true });
         node.start();
       } catch (err) { reject(err); }
     });
@@ -337,7 +350,8 @@
     const raw = String(text || '').trim();
     if (!raw) return '';
     try {
-      return String(window.SHINOSpeech?.normalize?.(raw) || raw).trim();
+      return typeof window.SHINOSpeech?.normalize === 'function'
+        ? String(window.SHINOSpeech.normalize(raw)).trim() : raw;
     } catch (_) {
       return raw;
     }
@@ -359,6 +373,15 @@
   function extractReadySpeech(buffer, flush = false, lowLatency = false) {
     let rest = String(buffer || '');
     const segments = [];
+    // Hold incomplete fenced code across network deltas; never split its
+    // punctuation into spoken phrases before the normalizer sees the fence.
+    rest = rest.replace(/```[\s\S]*?```/g, ' Le code est affiche a l ecran. ');
+    const openFence = rest.indexOf('```');
+    let held = '';
+    if (openFence >= 0) {
+      held = flush ? '' : rest.slice(openFence);
+      rest = rest.slice(0, openFence);
+    }
 
     while (rest.trim()) {
       const match = rest.match(/^([\s\S]*?[.!?…]+)(?=\s|$)/);
@@ -391,7 +414,7 @@
       rest = '';
     }
 
-    return { segments, rest };
+    return { segments, rest: rest + held };
   }
 
   function createSpeechStreamer(turnStartedAt) {
@@ -401,39 +424,43 @@
     let spokenSegments = 0;
     let firstSegmentQueued = false;
     let firstAudioLogged = false;
-    let lastEngine = 'piper';
+    let lastEngine = '';
+    let failure = null;
+    const controller = new AbortController();
+    const failed = (err) => { failure ||= err; controller.abort(); };
 
     function enqueue(rawSegment) {
       const spoken = normalizeSpeech(rawSegment);
-      if (!spoken || spoken.length < 2) return;
+      if (controller.signal.aborted || !spoken || spoken.length < 2) return;
       firstSegmentQueued = true;
 
       const audioPromise = synthChain = synthChain.then(async () => {
-        setUi('SPEAKING…', ttsLabel(lastEngine), true);
-        setCore('speaking');
-        const audio = await synthesize(spoken);
+        if (controller.signal.aborted) return null;
+        const audio = await synthesize(spoken, controller.signal);
         lastEngine = audio.engine || lastEngine;
         if (audio.durationMs > 0) {
           console.info(`[SHINO-OS] TTS ${ttsLabel(lastEngine)} ${Math.round(audio.durationMs)}ms · ${spoken.length} chars`);
         }
         return audio;
-      });
+      }).catch((err) => { failed(err); return null; });
 
       playChain = playChain.then(async () => {
         const audio = await audioPromise;
+        if (!audio || controller.signal.aborted) return;
         setUi('SPEAKING…', `${ttsLabel(audio.engine || lastEngine)} · STREAM`, true);
         setCore('speaking');
         if (!firstAudioLogged) {
           firstAudioLogged = true;
           console.info(`[SHINO-OS] Voice first audio ${Math.round(performance.now() - turnStartedAt)}ms after capture close`);
         }
-        await playAudio(audio.bytes);
+        await playAudio(audio.bytes, controller.signal);
         spokenSegments += 1;
-      });
+      }).catch(failed);
     }
 
     return {
       push(delta) {
+        if (controller.signal.aborted) return;
         pendingText += String(delta || '');
         const ready = extractReadySpeech(pendingText, false, !firstSegmentQueued);
         pendingText = ready.rest;
@@ -444,8 +471,10 @@
         pendingText = ready.rest;
         ready.segments.forEach(enqueue);
         await playChain;
+        if (failure) throw failure;
         return { engine: lastEngine, segments: spokenSegments };
       },
+      cancel() { pendingText = ''; controller.abort(); },
     };
   }
 
@@ -456,6 +485,7 @@
     const recordedRate = sourceRate;
     await closeCapture();
     const turnStartedAt = performance.now();
+    let speech = null;
 
     try {
       if (recorded.length < recordedRate * 0.2) {
@@ -519,7 +549,7 @@
       if (loadMs > 0) console.info(`[SHINO-OS] Handy load ${Math.round(loadMs)}ms, infer ${Math.round(inferMs)}ms`);
       if (!window.SHINOChat?.sendText) throw new Error('chat bridge unavailable');
 
-      const speech = createSpeechStreamer(turnStartedAt);
+      speech = createSpeechStreamer(turnStartedAt);
       const answer = await window.SHINOChat.sendText(text, {
         deferIdle: true,
         noFocus: true,
@@ -533,6 +563,7 @@
       setUi('VOICE READY', `${sttLabel} + ${finalTts}`, false);
       setCore('idle');
     } catch (err) {
+      speech?.cancel();
       console.error('[SHINO-OS] Local voice turn failed:', err);
       setUi('VOICE ERROR', 'VOICE ERR', false);
       setCore('error');
@@ -554,10 +585,11 @@
   async function refreshStatus() {
     try {
       const status = await fetchStatus();
-      const tts = status.tts_url ? 'CHATTERBOX' : 'PIPER';
+      if (processing || captureActive) return;
+      const tts = status.tts === 'not-run' ? 'TTS READY' : ttsLabel(status.tts);
       if (status.stt === 'lan') setUi('VOICE READY', `LAN · ${tts}`, false);
       else if (status.handy_available) {
-        const handyMode = status.handy_resident_compatible ? 'HANDY R' : 'HANDY';
+        const handyMode = 'HANDY';
         setUi('VOICE READY', `${handyMode} · ${tts}`, false);
       } else setUi('VOICE OFF', 'HANDY MISSING', false);
     } catch (_) {}
