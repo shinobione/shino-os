@@ -22,7 +22,7 @@ try {
   if ($LASTEXITCODE) { throw 'browser regression failed' }
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/launcher.ps1
   if ($LASTEXITCODE) { throw 'launcher regression failed' }
-  & $Python tests/workflow_smoke.py --pinned-runtime $PinnedRuntime
+  & $Python tests/workflow_smoke.py "--pinned-runtime=$PinnedRuntime"
   if ($LASTEXITCODE) { throw 'workflow smoke failed' }
   Write-Host 'SHINO local checks: OK'
 } finally { Pop-Location }

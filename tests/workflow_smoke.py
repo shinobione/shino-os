@@ -42,7 +42,8 @@ with tempfile.TemporaryDirectory(prefix='shino-checks-') as directory:
     print('Batch helper exit propagation: OK', flush=True)
     def ps(code):
         script = work / 'step.ps1'
-        script.write_text("$ErrorActionPreference = 'Stop'\n" + code, encoding='utf-8-sig')
+        # Actions writes BOM-less step scripts; match its Windows PS 5.1 decoding.
+        script.write_text("$ErrorActionPreference = 'Stop'\n" + code, encoding='utf-8')
         subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script)], cwd=work, env=env, check=True)
 
     workflow = yaml.safe_load((ROOT / '.github/workflows/overlay-ci.yml').read_text(encoding='utf-8'))

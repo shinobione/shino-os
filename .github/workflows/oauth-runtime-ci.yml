@@ -51,7 +51,7 @@ jobs:
           $page = Get-Content $html -Raw
 
           if ($ui -match 'inp\.value\s*=\s*v') { throw 'masked settings are still written into editable inputs' }
-          if ($ui -notmatch 'Déjà configuré') { throw 'configured-placeholder guard missing' }
+          if ($ui -notmatch 'D\u00e9j\u00e0 configur\u00e9') { throw 'configured-placeholder guard missing' }
           if ($ui -match '__SHINO_GOOGLE_OAUTH_WINDOW__|window\.open\(') { throw 'popup OAuth code present' }
           if ($ui -notmatch 'target\.location\.href\s*=\s*cfg\.url') { throw 'top-level same-tab OAuth navigation missing' }
           if ($oauth -notmatch 'http://localhost:18777/api/google/callback') { throw 'canonical OAuth callback missing' }
