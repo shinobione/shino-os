@@ -32,6 +32,15 @@ with tempfile.TemporaryDirectory(prefix='shino-checks-') as directory:
     env.pop('SHINO_RUNTIME_ROOT', None)
     env.pop('SHINO_TTS_URL', None)
     env['PATH'] = str(Path(os.sys.executable).parent) + os.pathsep + env['PATH']
+    # Exercise both provider payload anchors in an isolated runtime. Locally use
+    # the exact pin; CI's fixture keeps this check offline and deterministic.
+    provider = work / 'fixtures/shino-voice-runtime/jarvis-OS/src/jarvis/providers/llm/local.py'
+    provider.parent.mkdir(parents=True)
+    if args.pinned_runtime:
+        pin = json.loads((ROOT / 'UPSTREAM.lock').read_text())['ref']
+        provider.write_bytes(subprocess.check_output(['git', '-c', f'safe.directory={Path(args.pinned_runtime).resolve().as_posix()}', '-C', args.pinned_runtime, 'show', f'{pin}:src/jarvis/providers/llm/local.py']))
+    else:
+        provider.write_text('class OllamaProvider(object):\n    def _payload(self):\n        payload: dict = {\n            "model": "fixture"}\n        return payload\n    def tool_loop(self):\n        payload: dict = {\n            "model": "fixture"}\n        return payload\n')
     # Exercise actual batch control flow with a harmless failing child.
     batch = (ROOT / 'shino.bat').read_text().replace('powershell.exe', 'call "%~dp0fake-powershell.bat"')
     (work / 'shino.bat').write_text(batch)
@@ -52,6 +61,21 @@ with tempfile.TemporaryDirectory(prefix='shino-checks-') as directory:
             print(step['name'], flush=True)
             ps(step['run'])
     # Explicitly verify startup failure leaves a usable endpoint configured.
+    patched = provider.read_text(encoding='utf-8-sig')
+    import ast
+    ast.parse(patched)
+    assert patched.count('**ollama_options(),') == 2
+    assert patched.count('from jarvis.interfaces.api.shino_ollama import ollama_options') == 1
+    # Execute the actual patched payload body, without importing Jarvis/runtime.
+    tree = ast.parse(patched)
+    provider_class = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'OllamaProvider')
+    payload_method = next(n for n in provider_class.body if isinstance(n, ast.FunctionDef) and n.name == '_payload')
+    namespace = {'ollama_options': lambda: {'keep_alive': '23m'}, '_claude_tools_to_ollama': lambda tools: tools}
+    exec(compile(ast.Module(body=[payload_method], type_ignores=[]), '<isolated-provider>', 'exec'), namespace)
+    import inspect, types
+    fn = namespace['_payload']
+    kwargs = {k: v for k, v in {'messages': [], 'system': 'test', 'stream': True, 'tools': []}.items() if k in inspect.signature(fn).parameters}
+    assert fn(types.SimpleNamespace(_model='fixture'), **kwargs)['keep_alive'] == '23m'
     ps("$text = Get-Content (Join-Path $env:RUNNER_TEMP 'shino-voice-runtime/jarvis-OS/.env') -Raw\nif ($text -notmatch 'SHINO_TTS_URL=http://127.0.0.1:18765') { throw 'startup failure disabled Chatterbox' }")
 
     if args.pinned_runtime:

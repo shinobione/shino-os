@@ -23,6 +23,28 @@ if (-not (Test-Path $OverlayRouter)) { exit 0 }
 
 New-Item -ItemType Directory -Force -Path $ApiDir | Out-Null
 Copy-Item $OverlayRouter (Join-Path $ApiDir "shino_local_voice.py") -Force
+Copy-Item (Join-Path $Root 'runtime_overlay\jarvis\interfaces\api\shino_ollama.py') (Join-Path $ApiDir 'shino_ollama.py') -Force
+
+# Both ordinary/streamed completions and tool-loop requests use this provider.
+# Patch only the pinned runtime; repeated staging is idempotent.
+$ollamaPath = Join-Path $JarvisDir 'src\jarvis\providers\llm\local.py'
+if (Test-Path $ollamaPath) {
+  $ollama = Get-Content $ollamaPath -Raw -Encoding UTF8
+  $ollama = $ollama -replace '(?m)^from jarvis.interfaces.api.shino_ollama import ollama_options\r?\n', ''
+  $ollama = $ollama -replace '(?m)^\s*\*\*ollama_options\(\),\r?\n', ''
+  $payloadPattern = '(?m)^(\s*)payload: dict = \{\r?$'
+  if ([regex]::Matches($ollama, $payloadPattern).Count -ne 2) { throw 'Pinned Ollama payload anchors changed; refusing partial keep-alive patch.' }
+  $ollama = [regex]::Replace($ollama, $payloadPattern, '$0' + "`n" + '$1    **ollama_options(),')
+  $ollama = $ollama.Replace('class OllamaProvider(', "from jarvis.interfaces.api.shino_ollama import ollama_options`n`nclass OllamaProvider(")
+  Set-Content $ollamaPath $ollama -Encoding UTF8
+}
+
+# Shell setting wins; otherwise honor the runtime .env without printing it.
+if (-not $env:SHINO_OLLAMA_KEEP_ALIVE -and (Test-Path $EnvPath)) {
+  $keepAliveLine = Get-Content $EnvPath | Where-Object { $_ -match '^\s*SHINO_OLLAMA_KEEP_ALIVE\s*=' } | Select-Object -Last 1
+  if ($keepAliveLine) { $env:SHINO_OLLAMA_KEEP_ALIVE = ($keepAliveLine -split '=',2)[1].Trim().Trim('"', "'") }
+}
+if (-not $env:SHINO_OLLAMA_KEEP_ALIVE) { $env:SHINO_OLLAMA_KEEP_ALIVE = '15m' }
 
 $begin = "# SHINO_LOCAL_VOICE_BEGIN"
 $end = "# SHINO_LOCAL_VOICE_END"
@@ -34,6 +56,8 @@ $block = @'
 # SHINO_LOCAL_VOICE_BEGIN
 from jarvis.interfaces.api.shino_local_voice import router as shino_local_voice_router  # noqa: E402
 app.include_router(shino_local_voice_router)
+from jarvis.interfaces.api.shino_ollama import install as install_shino_ollama  # noqa: E402
+install_shino_ollama(app)
 # SHINO_LOCAL_VOICE_END
 
 '@
