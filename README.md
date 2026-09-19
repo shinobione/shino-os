@@ -96,7 +96,17 @@ Current V0.2 integration features:
 
 Jarvis uses the stable OAuth origin `http://localhost:18777` by default. An unknown listener blocks startup rather than being killed. `SHINO_JARVIS_PORT` can select another non-reserved port; update OAuth redirect configuration accordingly.
 
-The end-to-end physical Chatterbox gate is still open. See [the audit and voice gate procedure](docs/VOICE-GATE-AUDIT.md) for checks, diagnostics, limitations and the deferred barge-in design.
+The warm single-turn physical voice gate passed on 19 September 2026 (user-confirmed microphone/playback, Chatterbox, zero fallbacks). Five-/20-turn stability remains unvalidated. See [the audit and voice gate procedure](docs/VOICE-GATE-AUDIT.md).
+
+### Warm voice and diagnostics
+
+In SHINO mode, `SHINO_OLLAMA_KEEP_ALIVE` defaults to `15m` for Jarvis's configured Ollama model and URL. Set it in the launching shell or the external runtime `.env`; the shell takes precedence. Examples: `30m`, `1h`, `0` (allow immediate unload), `-1` (retain indefinitely). Invalid values fall back to `15m`. Normal non-SHINO Jarvis requests are unchanged. This is an idle residency preference, not a guarantee against eviction under memory pressure.
+
+After Jarvis initialization, one background warmup sends a one-token request directly to that configured Ollama model. It never enters sessions, history, memory consolidation or TTS. It is bounded to 90 seconds, reports `SHINO Ollama warmup ready` or a concise failure, and never gates API startup. No second Ollama service is launched. Wait for warmup success and confirm `/api/ps` residency before a physical test.
+
+The voice UI distinguishes total STT request time from Handy inference. `/api/shino/voice/status` exposes `stt_metrics` and the last 20 `tts_recent_metrics` (no transcript/audio). Browser console entries `[SHINO-OS] STT stages`, `TTS segment` and `Voice turn` capture timings; the last ten turns are also in `window.SHINOVoiceDiagnostics` in the cockpit frame. Keep DevTools open with Preserve log during physical tests.
+
+STT metrics separate request body read, lock wait, WAV preparation, Handy process lifetime, model load, inference and output parsing. `process_other_ms` is a residual (startup/exit/other work), not isolated startup time. Browser transport/response overhead is also a residual, not a network-only measurement. TTS records queue/request/response/decode/source-start/end per segment, worker synthesis time when supplied, actual response backend, fallback and first eligible text-to-playback delay. WebAudio source start approximates playback scheduling; it does **not** measure sound reaching the listener. Metrics from a failed or cancelled turn may be incomplete.
 
 ## Local checks
 

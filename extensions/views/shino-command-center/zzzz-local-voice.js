@@ -32,6 +32,21 @@
   let orbHeartbeat = null;
   let residentHandyActive = false;
 
+  // Bounded, text/audio-free diagnostics. All *_ms offsets use this turn's
+  // performance clock; started_unix_ms permits approximate server correlation.
+  function newDiagnostics(start) {
+    const turns = window.SHINOVoiceDiagnostics ||= [];
+    const turn = { started_unix_ms: Date.now(), start, segments: [], playback_clock: 'WebAudio source start; not acoustic output' };
+    turns.push(turn);
+    if (turns.length > 10) turns.shift();
+    return turn;
+  }
+  function mark(turn) { return Math.round((performance.now() - turn.start) * 10) / 10; }
+  function sttSummary(stt, backend) {
+    const total = Number(stt.client_total_ms ?? stt.metrics?.server_total_ms ?? stt.duration_ms ?? 0);
+    return `HANDY ${backend || 'VULKAN'} · total ${(total / 1000).toFixed(2)}s / infer ${Math.round(Number(stt.transcribe_ms || 0))}ms`;
+  }
+
   function root() { return document.getElementById(ROOT_ID); }
   function q(sel) { return root()?.querySelector(sel) || null; }
   function authHeaders(extra = {}) {
@@ -298,7 +313,13 @@
         }
         throw new Error(detail ? `STT ${response.status}: ${detail}` : `STT HTTP ${response.status}`);
       }
-      return response.json();
+      const result = await response.json();
+      result.client_total_ms = performance.now() - started;
+      result.transport_and_response_ms = Number.isFinite(result.metrics?.server_total_ms)
+        ? Math.max(0, result.client_total_ms - result.metrics.server_total_ms) : null;
+      // Residual includes upload, scheduling, response transfer and JSON parsing;
+      // this is not an isolated network or upload measurement.
+      return result;
     } catch (err) {
       if (err?.name === 'AbortError') throw new Error('Handy timeout après 60 s');
       throw err;
@@ -308,7 +329,8 @@
     }
   }
 
-  async function synthesize(text, signal) {
+  async function synthesize(text, signal, metric, turn) {
+    if (metric) metric.synth_request_start_ms = mark(turn);
     const response = await fetch('/api/shino/voice/tts', {
       method: 'POST',
       headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -318,16 +340,27 @@
     if (!response.ok) throw new Error(`TTS HTTP ${response.status}`);
     const fallback = response.headers.get('X-SHINO-TTS-FALLBACK');
     if (fallback) console.warn(`[SHINO-OS] Piper fallback: ${fallback}; details: /api/shino/voice/status (tts_last_error)`);
+    const bytes = await response.arrayBuffer();
+    if (metric) {
+      metric.synth_response_received_ms = mark(turn);
+      metric.server_request_ms = Number(response.headers.get('X-SHINO-TTS-MS') || 0);
+      const synthesisMs = response.headers.get('X-SHINO-SYNTH-MS');
+      metric.worker_synthesis_ms = synthesisMs == null ? null : Number(synthesisMs);
+      metric.backend = response.headers.get('X-SHINO-TTS') || 'unknown';
+      metric.fallback = Boolean(fallback) || metric.backend === 'piper';
+    }
     return {
-      bytes: await response.arrayBuffer(),
+      bytes,
       engine: response.headers.get('X-SHINO-TTS') || 'unknown',
       durationMs: Number(response.headers.get('X-SHINO-TTS-MS') || 0),
+      fallback: Boolean(fallback),
     };
   }
 
-  async function playAudio(bytes, signal) {
+  async function playAudio(bytes, signal, metric, turn) {
     const ctx = await ensurePlaybackContext();
     const decoded = await ctx.decodeAudioData(bytes.slice(0));
+    if (metric) metric.decode_complete_ms = mark(turn);
     if (signal?.aborted) return;
     return new Promise((resolve, reject) => {
       try {
@@ -338,10 +371,25 @@
         node.onended = () => {
           signal?.removeEventListener('abort', stop);
           node.disconnect();
+          if (metric) {
+            metric.end_ms = mark(turn);
+            metric.cancelled = Boolean(signal?.aborted);
+            console.info('[SHINO-OS] TTS segment', JSON.stringify(metric));
+          }
           resolve();
         };
         signal?.addEventListener('abort', stop, { once: true });
         node.start();
+        if (metric) {
+          metric.source_start_ms = mark(turn);
+          metric.audio_context_start_s = ctx.currentTime;
+          metric.output_latency_ms = Number.isFinite(ctx.outputLatency) ? ctx.outputLatency * 1000 : null;
+          // source_start is an approximation of playback, never measured sound.
+          if (turn.first_playback_start_ms == null) {
+            turn.first_playback_start_ms = metric.source_start_ms;
+            turn.first_eligible_to_playback_ms = metric.source_start_ms - turn.first_eligible_ms;
+          }
+        }
       } catch (err) { reject(err); }
     });
   }
@@ -417,13 +465,12 @@
     return { segments, rest: rest + held };
   }
 
-  function createSpeechStreamer(turnStartedAt) {
+  function createSpeechStreamer(turnStartedAt, diagnostics = newDiagnostics(turnStartedAt)) {
     let pendingText = '';
     let synthChain = Promise.resolve();
     let playChain = Promise.resolve();
     let spokenSegments = 0;
     let firstSegmentQueued = false;
-    let firstAudioLogged = false;
     let lastEngine = '';
     let failure = null;
     const controller = new AbortController();
@@ -433,11 +480,16 @@
       const spoken = normalizeSpeech(rawSegment);
       if (controller.signal.aborted || !spoken || spoken.length < 2) return;
       firstSegmentQueued = true;
+      const metric = { segment: diagnostics.segments.length + 1, queued_ms: mark(diagnostics) };
+      diagnostics.segments.push(metric);
+      diagnostics.first_eligible_ms ??= metric.queued_ms;
 
       const audioPromise = synthChain = synthChain.then(async () => {
         if (controller.signal.aborted) return null;
-        const audio = await synthesize(spoken, controller.signal);
+        const audio = await synthesize(spoken, controller.signal, metric, diagnostics);
         lastEngine = audio.engine || lastEngine;
+        metric.backend = audio.engine || 'unknown';
+        metric.fallback = Boolean(audio.fallback) || metric.backend === 'piper';
         if (audio.durationMs > 0) {
           console.info(`[SHINO-OS] TTS ${ttsLabel(lastEngine)} ${Math.round(audio.durationMs)}ms · ${spoken.length} chars`);
         }
@@ -449,11 +501,7 @@
         if (!audio || controller.signal.aborted) return;
         setUi('SPEAKING…', `${ttsLabel(audio.engine || lastEngine)} · STREAM`, true);
         setCore('speaking');
-        if (!firstAudioLogged) {
-          firstAudioLogged = true;
-          console.info(`[SHINO-OS] Voice first audio ${Math.round(performance.now() - turnStartedAt)}ms after capture close`);
-        }
-        await playAudio(audio.bytes, controller.signal);
+        await playAudio(audio.bytes, controller.signal, metric, diagnostics);
         spokenSegments += 1;
       }).catch(failed);
     }
@@ -471,6 +519,11 @@
         pendingText = ready.rest;
         ready.segments.forEach(enqueue);
         await playChain;
+        diagnostics.segment_count = diagnostics.segments.length;
+        diagnostics.played_segments = spokenSegments;
+        diagnostics.any_fallback = diagnostics.segments.some(s => s.fallback);
+        diagnostics.error = failure ? String(failure.message || failure) : null;
+        console.info('[SHINO-OS] Voice turn', JSON.stringify(diagnostics));
         if (failure) throw failure;
         return { engine: lastEngine, segments: spokenSegments };
       },
@@ -481,10 +534,12 @@
   async function stopAndProcess() {
     if (!captureActive || processing) return;
     processing = true;
+    const turnStartedAt = performance.now();
+    const diagnostics = newDiagnostics(turnStartedAt);
     const recorded = flatten();
     const recordedRate = sourceRate;
     await closeCapture();
-    const turnStartedAt = performance.now();
+    diagnostics.capture_closed_ms = mark(diagnostics);
     let speech = null;
 
     try {
@@ -504,6 +559,7 @@
       }
 
       const pcm = resample(recorded, recordedRate, TARGET_RATE);
+      diagnostics.audio_prepared_ms = mark(diagnostics);
       let stt = null;
 
       if (residentHandyActive) {
@@ -525,7 +581,12 @@
       if (!stt) {
         setUi('HANDY…', preflight?.stt === 'lan' ? 'WHISPER LAN' : 'TURBO · RTX 3060', true);
         setCore('thinking');
+        diagnostics.stt_request_start_ms = mark(diagnostics);
         stt = await transcribe(pcm);
+        diagnostics.stt_response_received_ms = mark(diagnostics);
+        diagnostics.stt = { ...stt.metrics, client_total_ms: stt.client_total_ms,
+          transport_and_response_ms: stt.transport_and_response_ms };
+        console.info('[SHINO-OS] STT stages', JSON.stringify(diagnostics));
       }
 
       const text = String(stt.text || '').trim();
@@ -543,18 +604,24 @@
         ? 'WHISPER LAN'
         : stt.backend === 'handy-resident'
           ? `HANDY RESIDENT · ${Math.round(Number(stt.duration_ms || 0))}ms`
-          : `HANDY ${backend || 'VULKAN'} · ${Math.round(inferMs || Number(stt.duration_ms || 0))}ms`;
+          : sttSummary(stt, backend);
       setUi('THINKING…', sttInfo, true);
       setCore('thinking');
       if (loadMs > 0) console.info(`[SHINO-OS] Handy load ${Math.round(loadMs)}ms, infer ${Math.round(inferMs)}ms`);
       if (!window.SHINOChat?.sendText) throw new Error('chat bridge unavailable');
 
-      speech = createSpeechStreamer(turnStartedAt);
+      speech = createSpeechStreamer(turnStartedAt, diagnostics);
+      diagnostics.jarvis_request_start_ms = mark(diagnostics);
       const answer = await window.SHINOChat.sendText(text, {
         deferIdle: true,
         noFocus: true,
-        onDelta: (delta) => speech.push(delta),
+        onDelta: (delta) => {
+          diagnostics.first_text_ms ??= mark(diagnostics);
+          diagnostics.last_text_ms = mark(diagnostics);
+          speech.push(delta);
+        },
       });
+      diagnostics.jarvis_response_end_ms = mark(diagnostics);
       if (!answer) throw new Error('empty assistant response');
 
       const spoken = await speech.finish();

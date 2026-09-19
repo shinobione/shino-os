@@ -2,6 +2,7 @@
 import asyncio
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import sys
@@ -33,6 +34,24 @@ def wav_bytes():
 
 
 class VoiceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stt_stage_metrics_include_request_body_and_process(self):
+        def handy_run(args, stdout_path, stderr_path):
+            stdout_path.write_text(json.dumps({'text': 'Bonjour', 'load_ms': 20,
+                'transcribe_ms': [30], 'bound_backend': 'Vulkan0'}))
+            return 0
+        ticks = iter(i * .1 for i in range(100))
+        request = types.SimpleNamespace(body=AsyncMock(return_value=b'\0\0' * 64))
+        with patch.dict(os.environ, {'SHINO_STT_URL': ''}), patch.object(voice, '_find_handy_exe', return_value=Path('mock-handy.exe')), patch.object(voice, '_run_handy_blocking', side_effect=handy_run), patch.object(voice.time, 'perf_counter', side_effect=lambda: next(ticks)):
+            result = await voice.transcribe(request)
+        metrics = result['metrics']
+        self.assertEqual(result['transcribe_ms'], 30)
+        self.assertEqual(metrics['inference_ms'], 30)
+        self.assertEqual(metrics['model_load_ms'], 20)
+        self.assertGreater(metrics['server_total_ms'], result['transcribe_ms'])
+        for key in ('body_read_ms', 'lock_wait_ms', 'wav_ms', 'process_ms', 'output_parse_ms', 'process_other_ms'):
+            self.assertGreaterEqual(metrics[key], 0, key)
+        self.assertIs(voice._stt_last_metrics, metrics)
+
     async def asyncSetUp(self):
         fallback.synthesize.reset_mock()
         self.env = patch.dict(os.environ, {"SHINO_TTS_URL": ""})
@@ -46,10 +65,12 @@ class VoiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_blank_startup_url_still_tries_chatterbox(self):
         def handler(request):
             self.assertEqual(str(request.url), "http://127.0.0.1:18765/synthesize")
-            return httpx.Response(200, content=wav_bytes(), headers={"X-SHINO-TTS": "chatterbox-v3"})
+            return httpx.Response(200, content=wav_bytes(), headers={"X-SHINO-TTS": "chatterbox-v3", "X-SHINO-TTS-MS": "123.4"})
         with self.client(handler):
             response = await voice.tts(voice.TTSRequest(text="Bonjour."))
         self.assertEqual(response.headers["X-SHINO-TTS"], "chatterbox-v3")
+        self.assertEqual(response.headers["X-SHINO-SYNTH-MS"], "123.4")
+        self.assertEqual(voice._tts_recent_metrics[-1]['worker_synthesis_ms'], 123.4)
         fallback.synthesize.assert_not_called()
 
     async def test_failure_is_documented_and_next_phrase_recovers(self):

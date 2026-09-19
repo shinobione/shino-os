@@ -9,6 +9,9 @@ Cette branche contient le code réel de V0.2. Pour éviter que deux énormes roa
 
 ### Audit local du 19/09/2026
 
+- Mise à jour physique : **gate vocal chaud à un tour PASS**, confirmé par l'utilisateur (transcription correcte, audio Chatterbox audible, zéro fallback). Total STT 5,450 s puis 2,207 s; inférence Handy 561 ms sur le tour correspondant; LLM chaud 0,720–2,454 s. Le label final `HANDY + CHATTERBOX V3` est normal; `CHATTERBOX V3 · STREAM` est le label pendant lecture.
+- Durcissement suivant : keep-alive SHINO configurable (15m par défaut), warmup sans historique et métriques par étape/segment. Validation physique de ces changements, cinq tours puis vingt tours encore à faire. Pas de barge-in, caméra ou merge PR #2.
+
 - Audit détaillé, limites et procédure du gate : [`docs/VOICE-GATE-AUDIT.md`](docs/VOICE-GATE-AUDIT.md).
 - Runtime local vérifié au SHA de `UPSTREAM.lock`. `update` restaure désormais ce pin au lieu de suivre `origin/main`.
 - Jarvis utilise **18777** pour son origine OAuth stable; Chatterbox reste **18765**. Les mentions `8765` et de sélection automatique de port dans l'ancienne roadmap `origin/main` sont obsolètes.

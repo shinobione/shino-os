@@ -1,5 +1,13 @@
 # Voice gate audit — 2026-09-19
 
+## Physical update and next gate
+
+The user established the warm single-turn physical gate as PASS: correct microphone transcription, audible Chatterbox, fallback count 0 -> 0 and no worker/TTS errors. Matching Handy inference was 561 ms but total STT was 5.450 s; a subsequent total was 2.207 s. Warm Ollama requests took 0.720–2.454 s without reload. User heard speech about 2–3 s after text. `HANDY + CHATTERBOX V3` is the normal final label; `CHATTERBOX V3 · STREAM` is the playback label. The latest retained 7.35 s synthesis cannot be assigned to first-audio latency.
+
+The residency/timing changes following that test require a new launch to stage them; they have not been applied to the currently running physical runtime. Tests remain isolated. Before the next five-turn gate: verify exact-HEAD CI, launch normally, wait for Jarvis and SHINO Ollama warmup readiness, verify the configured Ollama service's model residency/expiration and Chatterbox 18765 health, record fallback baseline, and open DevTools with Preserve log. Perform five short user-spoken turns sequentially, waiting for each playback to finish. Record transcript, backend, audible delay and per-turn diagnostics; inspect fallback/worker/GPU state afterwards. Stop on errors/fallbacks; do not begin twenty turns yet. See README for metric definitions and configuration.
+
+The original audit below is historical; its pending single-turn status is superseded by this update.
+
 ## Established locally
 
 Audited `integration/jarvis-upstream`, starting at `c331104`. Only pre-existing untracked content was a worker `__pycache__` directory; it was preserved and is now ignored. No AGENTS.md existed; a concise project handoff was added.

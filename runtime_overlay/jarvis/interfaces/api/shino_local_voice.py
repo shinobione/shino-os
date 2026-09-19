@@ -37,6 +37,8 @@ _stt_last_error = ""
 _stt_last_backend = ""
 _stt_last_bound_backend = ""
 _stt_last_load_ms: float | None = None
+_stt_last_metrics: dict[str, object] = {}
+_tts_recent_metrics: list[dict[str, object]] = []
 _stt_last_infer_ms: float | None = None
 _stt_last_rtf: float | None = None
 
@@ -307,7 +309,9 @@ async def _run_handy(pcm: bytes) -> dict[str, object]:
     stderr_path = temp_dir / "stderr.txt"
 
     try:
+        wav_started = time.perf_counter()
         audio_secs = await asyncio.to_thread(_write_pcm16_wav, pcm, wav_path)
+        wav_ms = (time.perf_counter() - wav_started) * 1000
         args = [
             str(handy),
             "--transcribe-file",
@@ -327,12 +331,15 @@ async def _run_handy(pcm: bytes) -> dict[str, object]:
         )
 
         try:
+            process_started = time.perf_counter()
             returncode = await asyncio.to_thread(
                 _run_handy_blocking, args, stdout_path, stderr_path
             )
+            process_ms = (time.perf_counter() - process_started) * 1000
         except subprocess.TimeoutExpired as exc:
             raise RuntimeError(f"Handy timeout après {int(_HANDY_TIMEOUT_SECONDS)} s") from exc
 
+        parse_started = time.perf_counter()
         stdout_text = stdout_path.read_text(encoding="utf-8", errors="replace").strip() if stdout_path.exists() else ""
         stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace").strip() if stderr_path.exists() else ""
 
@@ -351,6 +358,11 @@ async def _run_handy(pcm: bytes) -> dict[str, object]:
         text = str(payload.get("text") or "").strip()
         payload["text"] = text
         payload["audio_secs"] = float(payload.get("audio_secs") or audio_secs)
+        payload["shino_metrics"] = {
+            "wav_ms": round(wav_ms, 1),
+            "process_ms": round(process_ms, 1),
+            "output_parse_ms": round((time.perf_counter() - parse_started) * 1000, 1),
+        }
         return payload
     finally:
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -386,6 +398,8 @@ async def status() -> dict[str, object]:
         "handy_device_index": _handy_device_index(),
         "handy_bound_backend": _stt_last_bound_backend or None,
         "handy_load_ms": _stt_last_load_ms,
+        "stt_metrics": _stt_last_metrics,
+        "tts_recent_metrics": list(_tts_recent_metrics),
         "handy_transcribe_ms": _stt_last_infer_ms,
         "handy_rtf": _stt_last_rtf,
         "handy_resident_compatible": resident_compatible,
@@ -569,15 +583,19 @@ async def _remote_transcribe(remote: str, pcm: bytes) -> str:
 async def transcribe(request: Request) -> dict[str, object]:
     global _stt_phase, _stt_started_at, _stt_last_ms, _stt_last_error
     global _stt_last_backend, _stt_last_bound_backend, _stt_last_load_ms
-    global _stt_last_infer_ms, _stt_last_rtf
+    global _stt_last_infer_ms, _stt_last_rtf, _stt_last_metrics
 
+    request_started = time.perf_counter()
+    request_started_unix_ms = round(time.time() * 1000, 1)
     pcm = await request.body()
+    body_read_ms = (time.perf_counter() - request_started) * 1000
     if not pcm:
         return {"text": "", "backend": "empty"}
     if len(pcm) > _MAX_PCM_BYTES:
         return {"text": "", "backend": "rejected", "error": "audio_too_large"}
 
     async with _stt_lock:
+        lock_wait_ms = (time.perf_counter() - request_started) * 1000 - body_read_ms
         _stt_started_at = time.perf_counter()
         _stt_last_error = ""
         remote = (os.getenv("SHINO_STT_URL") or "").strip()
@@ -619,6 +637,21 @@ async def transcribe(request: Request) -> dict[str, object]:
             else:
                 _stt_last_infer_ms = float(handy.get("best_ms") or 0.0)
             _stt_last_rtf = float(handy.get("rtf") or 0.0)
+            _stt_last_metrics = {
+                **handy.get("shino_metrics", {}),
+                "request_started_unix_ms": request_started_unix_ms,
+                "body_read_ms": round(body_read_ms, 1),
+                "lock_wait_ms": round(lock_wait_ms, 1),
+                "model_load_ms": _stt_last_load_ms,
+                "inference_ms": _stt_last_infer_ms,
+                "server_total_ms": round((time.perf_counter() - request_started) * 1000, 1),
+            }
+            # This residual includes process startup/exit and other Handy work;
+            # it is not a direct measurement of process startup alone.
+            process_ms = _stt_last_metrics.get("process_ms")
+            if process_ms is not None:
+                _stt_last_metrics["process_other_ms"] = round(max(0, process_ms - _stt_last_load_ms - _stt_last_infer_ms), 1)
+            logger.info("SHINO STT metrics {}", json.dumps(_stt_last_metrics))
             _stt_phase = "ready"
             logger.info(
                 "SHINO Handy one-shot done: total={} ms, load={} ms, infer={} ms, backend={}, rtf={:.2f}x, chars={}",
@@ -646,10 +679,11 @@ async def transcribe(request: Request) -> dict[str, object]:
             "load_ms": _stt_last_load_ms,
             "transcribe_ms": _stt_last_infer_ms,
             "rtf": _stt_last_rtf,
+            "metrics": _stt_last_metrics,
         }
 
 
-async def _natural_tts(text: str, language_id: str) -> tuple[bytes, str, float] | None:
+async def _natural_tts(text: str, language_id: str) -> tuple[bytes, str, float, float | None] | None:
     url = _natural_tts_url()
     if not url:
         return None
@@ -676,7 +710,23 @@ async def _natural_tts(text: str, language_id: str) -> tuple[bytes, str, float] 
         raise RuntimeError("Chatterbox returned empty or invalid WAV audio")
     elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
     engine = response.headers.get("X-SHINO-TTS", "chatterbox-v3")
-    return response.content, engine, elapsed_ms
+    try:
+        worker_ms = float(response.headers["X-SHINO-TTS-MS"])
+        if not 0 <= worker_ms < float('inf'):
+            worker_ms = None
+    except (KeyError, ValueError):
+        worker_ms = None
+    return response.content, engine, elapsed_ms, worker_ms
+
+
+def _record_tts(started_unix_ms, engine, elapsed_ms, worker_ms, fallback):
+    metric = {"request_started_unix_ms": started_unix_ms,
+              "response_ready_unix_ms": round(time.time() * 1000, 1),
+              "backend": engine, "backend_request_ms": elapsed_ms,
+              "worker_synthesis_ms": worker_ms, "fallback": fallback}
+    _tts_recent_metrics.append(metric)
+    del _tts_recent_metrics[:-20]
+    logger.info("SHINO TTS segment {}", json.dumps(metric))
 
 
 @router.post("/tts")
@@ -689,19 +739,24 @@ async def tts(body: TTSRequest) -> Response:
         return Response(content=b"", media_type="audio/wav")
 
     language_id = (body.language_id or _natural_tts_language()).strip() or "fr"
+    started_unix_ms = round(time.time() * 1000, 1)
     natural_url = _natural_tts_url()
     if natural_url:
         try:
             result = await _natural_tts(text, language_id)
             if result is not None:
-                audio, engine, elapsed_ms = result
+                audio, engine, elapsed_ms, worker_ms = result
                 _tts_last_backend = engine
                 _tts_last_error = ""
                 _tts_last_ms = elapsed_ms
+                _record_tts(started_unix_ms, engine, elapsed_ms, worker_ms, False)
+                headers = {"X-SHINO-TTS": engine, "X-SHINO-TTS-MS": str(elapsed_ms)}
+                if worker_ms is not None:
+                    headers["X-SHINO-SYNTH-MS"] = str(worker_ms)
                 return Response(
                     content=audio,
                     media_type="audio/wav",
-                    headers={"X-SHINO-TTS": engine, "X-SHINO-TTS-MS": str(elapsed_ms)},
+                    headers=headers,
                 )
         except Exception as exc:
             _tts_last_error = f"{type(exc).__name__}: {exc}"[:800]
@@ -713,6 +768,7 @@ async def tts(body: TTSRequest) -> Response:
     audio = await tts_engine.synthesize(text)
     _tts_last_backend = "piper"
     _tts_last_ms = round((time.perf_counter() - started) * 1000, 1)
+    _record_tts(started_unix_ms, "piper", _tts_last_ms, None, True)
     return Response(
         content=audio,
         media_type="audio/wav",
